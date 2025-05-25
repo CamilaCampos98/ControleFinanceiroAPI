@@ -91,7 +91,7 @@ public class GoogleSheetsService
             compra.FormaPgto,
             parcelaStr,
             compra.Descricao,
-            valorParcela.ToString("F2"),
+            valorParcela,
             dataParcela.ToString("MM/yyyy"),
             dataParcela.ToString("yyyy-MM-dd")
         });
