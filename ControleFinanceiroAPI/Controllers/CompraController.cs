@@ -6,11 +6,11 @@ namespace ControleFinanceiroAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    public class ComprasController : ControllerBase
+    public class CompraController : ControllerBase
     {
         private readonly GoogleSheetsService _googleSheetsService;
 
-        public ComprasController(GoogleSheetsService googleSheetsService)
+        public CompraController(GoogleSheetsService googleSheetsService)
         {
             _googleSheetsService = googleSheetsService;
         }
@@ -21,7 +21,7 @@ namespace ControleFinanceiroAPI.Controllers
             return Ok("API Funcionando");
         }
 
-        [HttpPost]
+        [HttpPost("RegistrarCompra")]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
             if (compra == null)
