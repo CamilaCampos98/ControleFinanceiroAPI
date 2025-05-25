@@ -2,11 +2,13 @@
 {
     public class EntradaModel
     {
-        public string Pessoa { get; set; } = string.Empty;
-        public string Fonte { get; set; } = string.Empty;  // Ex.: Salário, Freelancer, etc.
-        public decimal ValorHora { get; set; }
-        public int HorasUteisMes { get; set; }
-        public string MesAno { get; set; } = string.Empty; // Ex.: "05/2025"
+        public string Pessoa { get; set; }
+        public string Fonte { get; set; }
+        public decimal ValorHora { get; set; }       // Valor da hora normal
+        public decimal HorasUteisMes { get; set; }   // Horas normais trabalhadas no mês
+        public string MesAno { get; set; }            // formato "MM/yyyy"
+        public string TipoEntrada { get; set; }       // "Salario" ou "HoraExtra"
+        public decimal HorasExtras { get; set; }      // Apenas para HoraExtra, quantidade de horas extras
     }
 
 }

@@ -64,29 +64,83 @@ namespace ControleFinanceiroAPI.Controllers
         [HttpPost("RegistrarEntrada")]
         public IActionResult RegistrarEntrada([FromBody] EntradaModel entrada)
         {
-            if (entrada == null)
-                return BadRequest("Dados inválidos");
-
-            var valorCalculado = entrada.ValorHora * entrada.HorasUteisMes;
-
-            var linha = new List<object>
-                {
-                    entrada.Pessoa,
-                    entrada.Fonte,
-                    valorCalculado.ToString("F2"), 
-                    entrada.MesAno
-                };
-
-            _googleSheetsService.WriteEntrada(linha);
-
-            return Ok(new
+            try
             {
-                message = "Entrada registrada com sucesso!",
-                valorCalculado,
-                entrada
-            });
-        }
+                if (entrada == null)
+                    return BadRequest("Dados inválidos");
 
+                decimal valorCalculado = 0m;
+
+                if (entrada.TipoEntrada == "Salario")
+                {
+                    // Cálculo padrão salário
+                    valorCalculado = entrada.ValorHora * entrada.HorasUteisMes;
+
+                    var linha = new List<object>
+                            {
+                                entrada.Pessoa,
+                                entrada.Fonte,
+                                valorCalculado.ToString("F2"),
+                                entrada.MesAno,
+                                "", // Extras fica vazio para salário
+                            };
+
+                    _googleSheetsService.WriteEntrada(linha);
+
+                    return Ok(new
+                    {
+                        message = "Entrada registrada com sucesso!",
+                        valorCalculado,
+                        entrada
+                    });
+                }
+                else if (entrada.TipoEntrada == "Extra")
+                {
+                    var entradaBase = _googleSheetsService.GetEntradaPorPessoaEMes(entrada.Pessoa, entrada.MesAno);
+
+                    if (entradaBase == null)
+                        return BadRequest("Entrada base (salário) não encontrada para a pessoa e mês.");
+
+                    // Parse do valorHora da coluna E (valor hora base)
+                    if (!decimal.TryParse(entradaBase["ValorHora"], out decimal valorHoraExtra))
+                        return BadRequest("Valor da hora inválido na base.");
+
+                    // Calcular valor extra
+                    decimal valorExtraCalculado = valorHoraExtra * entrada.HorasExtras;
+
+                    // Pegar o valor extra atual para somar (coluna F)
+                    decimal extrasAtuais = 0m;
+                    if (!decimal.TryParse(entradaBase["Extras"], out extrasAtuais))
+                        extrasAtuais = 0m;
+
+                    decimal novosExtras = extrasAtuais + valorExtraCalculado;
+
+                    // Atualizar a coluna Extras na planilha
+                    _googleSheetsService.AtualizarExtrasEntrada(entrada.Pessoa, entrada.MesAno, novosExtras);
+
+                    return Ok(new
+                    {
+                        message = "Horas extras registradas com sucesso!",
+                        valorHoraExtra,
+                        horasExtras = entrada.HorasExtras,
+                        valorExtraCalculado,
+                        novosExtras
+                    });
+                }
+                else
+                {
+                    return BadRequest("Tipo de entrada inválido.");
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+
+                return StatusCode(500, $"Erro interno: {ex.Message}");
+            }
+
+        }
 
         [HttpGet("TodasComprasPorPessoa")]
         public IActionResult GetAllComprasPorPessoa()

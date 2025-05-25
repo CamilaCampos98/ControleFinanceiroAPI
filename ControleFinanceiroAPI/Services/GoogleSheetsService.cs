@@ -282,7 +282,7 @@ public class GoogleSheetsService
         var valueRange = new ValueRange { Values = new List<IList<object>> { entrada } };
 
         var appendRequest = _service.Spreadsheets.Values.Append(
-            valueRange, SpreadsheetId, "Config!A:D");
+            valueRange, SpreadsheetId, "Config!A:F");
 
         appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
         appendRequest.Execute();
@@ -313,32 +313,67 @@ public class GoogleSheetsService
         return false;
     }
 
-
-    public decimal ConsultarSaldo(string pessoa, string mesAno, string fonte)
+    // Busca entrada pelo nome da pessoa e mês
+    public Dictionary<string, string>? GetEntradaPorPessoaEMes(string pessoa, string mesAno)
     {
-        // Ler a aba Config
-        var entradasRange = "Config!A:D";
-        var entradas = _service.Spreadsheets.Values.Get(SpreadsheetId, entradasRange).Execute().Values ?? new List<IList<object>>();
+        var range = "Config!A:F";
+        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+        var response = request.Execute();
+        var values = response.Values;
 
-        decimal totalEntrada = entradas
-            .Where(r => r.Count >= 4 &&
-                        r[0].ToString() == mesAno &&
-                        r[1].ToString() == pessoa &&
-                        r[3].ToString() == fonte)
-            .Sum(r => decimal.TryParse(r[2].ToString(), out var v) ? v : 0);
+        if (values == null || values.Count == 0)
+            return null;
 
-        // Ler a aba Controle
-        var controleRange = "Controle!A:I";
-        var controle = _service.Spreadsheets.Values.Get(SpreadsheetId, controleRange).Execute().Values ?? new List<IList<object>>();
+        // Supondo que a primeira linha é cabeçalho
+        for (int i = 1; i < values.Count; i++)
+        {
+            var row = values[i];
+            if (row.Count >= 5)
+            {
+                var pessoaCell = row[0]?.ToString();
+                var mesAnoCell = row[3]?.ToString();
 
-        decimal totalSaida = controle
-            .Where(r => r.Count >= 9 &&
-                        r[5].ToString() == mesAno &&
-                        r[7].ToString() == pessoa &&
-                        r[8].ToString() == fonte)
-            .Sum(r => decimal.TryParse(r[4].ToString(), out var v) ? v : 0);
+                if (string.Equals(pessoaCell, pessoa, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(mesAnoCell, mesAno, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Dictionary<string, string>
+                    {
+                        ["Pessoa"] = pessoaCell ?? "",
+                        ["Fonte"] = row[1]?.ToString() ?? "",
+                        ["Valor"] = row[2]?.ToString() ?? "0",
+                        ["MesAno"] = mesAnoCell ?? "",
+                        ["ValorHora"] = row[4]?.ToString() ?? "0",
+                        ["Extras"] = row[5]?.ToString() ?? "0",
+                        ["Linha"] = i.ToString()
+                    };
+                }
+            }
+        }
 
-        return totalEntrada - totalSaida;
+        return null;
+    }
+
+
+    // Atualiza a coluna Extras da entrada existente para pessoa e mês
+    public void AtualizarExtrasEntrada(string pessoa, string mesAno, decimal novosExtras)
+    {
+        var entrada = GetEntradaPorPessoaEMes(pessoa, mesAno);
+        if (entrada == null)
+            throw new Exception("Entrada não encontrada para atualização.");
+
+        int linha = int.Parse(entrada["Linha"]);
+        int planilhaLinha = linha + 1; // Conta o cabeçalho da planilha
+
+        string cell = $"F{planilhaLinha}"; // coluna F = Extras
+
+        var valueRange = new ValueRange
+        {
+            Values = new List<IList<object>> { new List<object> { novosExtras.ToString("F2") } }
+        };
+
+        var updateRequest = _service.Spreadsheets.Values.Update(valueRange, SpreadsheetId, $"Config!{cell}");
+        updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+        updateRequest.Execute();
     }
 
 }
