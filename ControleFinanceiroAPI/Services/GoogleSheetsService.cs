@@ -368,7 +368,7 @@ public class GoogleSheetsService
 
         var valueRange = new ValueRange
         {
-            Values = new List<IList<object>> { new List<object> { novosExtras.ToString("F2") } }
+            Values = new List<IList<object>> { new List<object> { novosExtras } }
         };
 
         var updateRequest = _service.Spreadsheets.Values.Update(valueRange, SpreadsheetId, $"Config!{cell}");
