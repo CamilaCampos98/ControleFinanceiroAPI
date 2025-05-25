@@ -24,10 +24,12 @@ namespace ControleFinanceiroAPI.Controllers
         [HttpPost("RegistrarCompra")]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
-            if (compra == null)
-                return BadRequest();
+            try
+            {
+                if (compra == null)
+                    return BadRequest();
 
-            var dataToWrite = new List<object>
+                var dataToWrite = new List<object>
                             {
                                 compra.FormaPgto,
                                 compra.TotalParcelas,
@@ -36,12 +38,19 @@ namespace ControleFinanceiroAPI.Controllers
                                 compra.Data.ToString("yyyy-MM-dd")
                             };
 
-            _googleSheetsService.WritePurchaseWithInstallments(compra);
-            return Ok(new
+                _googleSheetsService.WritePurchaseWithInstallments(compra);
+                return Ok(new
+                {
+                    message = "Compra cadastrada com sucesso!",
+                    compra
+                });
+            }
+            catch (Exception ex)
             {
-                message = "Compra cadastrada com sucesso!",
-                compra
-            });
+
+                throw new Exception(ex.Message);
+            }
+            
         }
     }
 }
