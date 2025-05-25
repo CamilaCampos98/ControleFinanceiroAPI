@@ -72,7 +72,7 @@ namespace ControleFinanceiroAPI.Controllers
 
                 decimal valorCalculado = 0m;
 
-                if (entrada.TipoEntrada == "Salario")
+                if (entrada.TipoEntrada != "Extra")
                 {
                     // Cálculo padrão salário
                     valorCalculado = entrada.ValorHora * entrada.HorasUteisMes;
