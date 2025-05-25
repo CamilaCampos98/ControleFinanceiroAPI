@@ -15,6 +15,12 @@ namespace ControleFinanceiroAPI.Controllers
             _googleSheetsService = googleSheetsService;
         }
 
+        [HttpGet]
+        public IActionResult Get()
+        {
+            return Ok("API Funcionando");
+        }
+
         [HttpPost]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
