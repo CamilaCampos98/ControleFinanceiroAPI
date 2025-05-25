@@ -9,7 +9,7 @@ namespace ControleFinanceiroAPI.Controllers
     public class CompraController : ControllerBase
     {
         private readonly GoogleSheetsService _googleSheetsService;
-
+        public string SheetName = "Controle";
         public CompraController(GoogleSheetsService googleSheetsService)
         {
             _googleSheetsService = googleSheetsService;
@@ -54,5 +54,26 @@ namespace ControleFinanceiroAPI.Controllers
             }
             
         }
+
+        [HttpGet("TodasCompras")]
+        public IActionResult GetAllCompras()
+        {
+            try
+            {
+                // Lê todas as linhas da aba Controle (ajuste o range conforme sua necessidade)
+                var linhas = _googleSheetsService.ReadData($"{SheetName}!A:E");
+
+                if (linhas == null || linhas.Count == 0)
+                    return NotFound("Nenhum dado encontrado na planilha.");
+
+                return Ok(linhas);
+            }
+            catch (Exception ex)
+            {
+                // Log do erro se precisar
+                return StatusCode(500, $"Erro ao acessar a planilha: {ex.Message}");
+            }
+        }
+
     }
 }

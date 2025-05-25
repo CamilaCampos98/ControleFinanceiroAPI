@@ -3,7 +3,6 @@ using Google.Apis.Auth.OAuth2;
 using Google.Apis.Services;
 using Google.Apis.Sheets.v4;
 using Google.Apis.Sheets.v4.Data;
-using Microsoft.AspNetCore.Hosting;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -13,50 +12,60 @@ public class GoogleSheetsService
     static readonly string[] Scopes = { SheetsService.Scope.Spreadsheets };
     static readonly string ApplicationName = "ControleFinanceiro";
 
-    private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM"; // só o ID, sem /edit
+    private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM";
     private readonly string SheetName = "Controle";
 
-    static readonly string JsonFilePath = Environment.GetEnvironmentVariable("GOOGLE_SHEETS_JSON_PATH")
-                    ?? "C:\\Users\\Camila\\source\\repos\\ControleFinanceiroAPI\\ControleFinanceiroAPI\\wwwroot\\credentials.json";
     private readonly SheetsService _service;
 
-    public SheetsService Connect()
+    public GoogleSheetsService()
     {
+        var jsonFilePath = GetJsonFilePath();
+        if (!File.Exists(jsonFilePath))
+        {
+            throw new FileNotFoundException($"Arquivo de credenciais não encontrado em: {jsonFilePath}");
+        }
+
         GoogleCredential credential;
-        using (var stream = new FileStream(JsonFilePath, FileMode.Open, FileAccess.Read))
+        using (var stream = new FileStream(jsonFilePath, FileMode.Open, FileAccess.Read))
         {
             credential = GoogleCredential.FromStream(stream)
-                .CreateScoped(Scopes);
+                                         .CreateScoped(Scopes);
         }
 
-        var service = new SheetsService(new BaseClientService.Initializer()
+        _service = new SheetsService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
-            ApplicationName = ApplicationName,
+            ApplicationName = ApplicationName
         });
-
-        return service;
     }
-    public GoogleSheetsService(IWebHostEnvironment env)
+
+    private static string GetJsonFilePath()
     {
-        // Ajuste o caminho para o arquivo JSON de credenciais na sua pasta wwwroot
-        var jsonPath = Path.Combine(env.WebRootPath, "credentials.json");
+        var pathFromEnv = Environment.GetEnvironmentVariable("GOOGLE_SHEETS_JSON_PATH");
 
-        GoogleCredential credential;
-        using (var stream = new FileStream(jsonPath, FileMode.Open, FileAccess.Read))
+        if (!string.IsNullOrEmpty(pathFromEnv) && File.Exists(pathFromEnv))
         {
-            credential = GoogleCredential.FromStream(stream).CreateScoped(Scopes);
+            return pathFromEnv;
         }
 
-        _service = new SheetsService(new BaseClientService.Initializer()
+        // Tenta na raiz
+        var localPath = Path.Combine(Directory.GetCurrentDirectory(), "credentials.json");
+        if (File.Exists(localPath))
         {
-            HttpClientInitializer = credential,
-            ApplicationName = ApplicationName,
-        });
+            return localPath;
+        }
+
+        // Tenta na pasta wwwroot
+        var wwwrootPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "credentials.json");
+        if (File.Exists(wwwrootPath))
+        {
+            return wwwrootPath;
+        }
+
+        // Se não encontrar, retorna o primeiro caminho para lançar erro depois
+        return pathFromEnv ?? localPath;
     }
 
-  
-    // Se quiser, pode deixar o método de leitura aqui também
     public IList<IList<object>> ReadData(string range)
     {
         var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
@@ -66,7 +75,9 @@ public class GoogleSheetsService
 
     public void WritePurchaseWithInstallments(CompraModel compra)
     {
-        var service = Connect();
+        var idLan = ObterProximoIdLan();
+        compra.idLan = idLan;
+        compra.MesAno = compra.Data.ToString("MM/yyyy");
 
         var linhas = new List<IList<object>>();
         var valorParcela = compra.ValorTotal / compra.TotalParcelas;
@@ -77,21 +88,60 @@ public class GoogleSheetsService
             var parcelaStr = compra.TotalParcelas > 1 ? $"{i}/{compra.TotalParcelas}" : "";
 
             linhas.Add(new List<object> {
+            compra.idLan,
             compra.FormaPgto,
             parcelaStr,
             compra.Descricao,
             valorParcela.ToString("F2"),
+            compra.MesAno,
             dataParcela.ToString("yyyy-MM-dd")
         });
         }
 
         var valueRange = new ValueRange { Values = linhas };
 
-        var appendRequest = service.Spreadsheets.Values.Append(valueRange, SpreadsheetId, $"{SheetName}!A:E");
+        var appendRequest = _service.Spreadsheets.Values.Append(
+            valueRange,
+            SpreadsheetId,
+            $"{SheetName}"
+        );
         appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
 
-        appendRequest.Execute();
+        var response = appendRequest.Execute();
+
+        // Opcional: log para confirmar inserção
+        Console.WriteLine("Linhas inseridas: " + response.Updates.UpdatedRows);
     }
 
+
+    public void TestConnection()
+    {
+        var request = _service.Spreadsheets.Get(SpreadsheetId);
+        var response = request.Execute();
+        Console.WriteLine($"Planilha encontrada: {response.Properties.Title}");
+    }
+
+    public int ObterProximoIdLan()
+    {
+        var range = $"{SheetName}!A:A"; // Supondo que idLan está na coluna A
+        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+        var response = request.Execute();
+
+        var valores = response.Values;
+
+        if (valores == null || valores.Count == 0)
+            return 1; // Se não tem nenhum, começa com 1
+
+        // Pular o cabeçalho se houver
+        var idList = valores.Skip(1) // remove cabeçalho, se não tiver, tira esse skip
+                             .Select(l => int.TryParse(l.FirstOrDefault()?.ToString(), out var id) ? id : 0)
+                             .Where(id => id > 0)
+                             .ToList();
+
+        if (!idList.Any())
+            return 1;
+
+        return idList.Max() + 1;
+    }
 
 }
