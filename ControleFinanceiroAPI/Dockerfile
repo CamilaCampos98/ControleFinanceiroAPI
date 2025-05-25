@@ -2,11 +2,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /app
 
-# Copia arquivos csproj e restaura dependências
 COPY *.csproj ./
 RUN dotnet restore
 
-# Copia o restante e faz o build
 COPY . ./
 RUN dotnet publish -c Release -o out
 
@@ -15,8 +13,6 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 COPY --from=build /app/out .
 
-# Define a porta (Render detecta automaticamente, mas pode forçar se quiser)
-ENV ASPNETCORE_URLS=http://+:10000
+# Não precisa fixar a porta aqui, Render passa via variável PORT
 
-# Inicia a aplicação
 ENTRYPOINT ["dotnet", "ControleFinanceiroAPI.dll"]
