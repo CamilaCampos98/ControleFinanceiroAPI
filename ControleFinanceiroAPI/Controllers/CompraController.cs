@@ -48,11 +48,8 @@ namespace ControleFinanceiroAPI.Controllers
                 }
 
                 _googleSheetsService.WritePurchaseWithInstallments(compra);
-                return Ok(new
-                {
-                    message = "Compra cadastrada com sucesso!",
-                    compra
-                });
+                return Ok(new { id = compra.idLan, message = "Compra registrada com sucesso" });
+
             }
             catch (Exception ex)
             {
