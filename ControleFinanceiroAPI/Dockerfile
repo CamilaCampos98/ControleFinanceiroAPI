@@ -13,7 +13,7 @@ COPY . ./
 RUN dotnet publish -c Release -o out
 
 # Copia o arquivo de credenciais para a pasta 'out' onde está a publicação
-COPY ControleFinanceiroAPI/wwwroot/credentials.json ./out/credentials.json
+COPY wwwroot/credentials.json /app/credentials.json
 
 # Imagem runtime
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
