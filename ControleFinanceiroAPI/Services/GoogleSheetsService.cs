@@ -328,7 +328,7 @@ public class GoogleSheetsService
         for (int i = 1; i < values.Count; i++)
         {
             var row = values[i];
-            if (row.Count >= 5)
+            if (row.Count >= 6)
             {
                 var pessoaCell = row[0]?.ToString();
                 var mesAnoCell = row[3]?.ToString();

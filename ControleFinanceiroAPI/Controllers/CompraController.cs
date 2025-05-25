@@ -79,9 +79,11 @@ namespace ControleFinanceiroAPI.Controllers
                     var linha = new List<object>
                             {
                                 entrada.Pessoa,
-                                entrada.Fonte,
+                                entrada.TipoEntrada,
                                 valorCalculado.ToString("F2"),
                                 entrada.MesAno,
+                                entrada.ValorHora,
+                                entrada.HorasExtras,
                                 "", // Extras fica vazio para salário
                             };
 
