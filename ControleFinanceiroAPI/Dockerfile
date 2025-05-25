@@ -1,25 +1,22 @@
-# Imagem do SDK para build
-FROM mcr.microsoft.com/dotnet/sdk:7.0 AS build
+# Imagem base para build
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /app
 
-# Copia os arquivos do projeto para o container
+# Copia arquivos csproj e restaura dependências
 COPY *.csproj ./
 RUN dotnet restore
 
+# Copia o restante e faz o build
 COPY . ./
-
-# Publica a aplicação em modo Release para a pasta /out
 RUN dotnet publish -c Release -o out
 
-# Imagem mais leve para rodar a aplicação
-FROM mcr.microsoft.com/dotnet/aspnet:7.0 AS runtime
+# Imagem runtime
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
+COPY --from=build /app/out .
 
-# Copia a publicação da etapa build para esta imagem
-COPY --from=build /app/out ./
+# Define a porta (Render detecta automaticamente, mas pode forçar se quiser)
+ENV ASPNETCORE_URLS=http://+:10000
 
-# Expõe a porta 80 para receber requisições HTTP
-EXPOSE 80
-
-# Comando para rodar a aplicação
+# Inicia a aplicação
 ENTRYPOINT ["dotnet", "ControleFinanceiroAPI.dll"]
