@@ -48,7 +48,9 @@ namespace ControleFinanceiroAPI.Controllers
             catch (Exception ex)
             {
 
-                throw new Exception(ex.Message);
+                Console.WriteLine($"Erro no endpoint RegistrarCompra: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+                return StatusCode(500, $"Erro interno: {ex.Message}");
             }
             
         }
