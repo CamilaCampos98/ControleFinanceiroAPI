@@ -73,7 +73,7 @@ namespace ControleFinanceiroAPI.Controllers
                 {
                     entrada.Pessoa,
                     entrada.Fonte,
-                    valorCalculado.ToString("F2"), // já formatado para moeda
+                    valorCalculado.ToString("F2"), 
                     entrada.MesAno
                 };
 
