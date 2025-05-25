@@ -8,10 +8,12 @@ builder.Configuration
 
 var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
 Console.WriteLine($"Listening on port: {port}");
-// Add services to the container.
 
+// Configure para escutar na porta correta
+builder.WebHost.UseUrls($"http://*:{port}");
+
+// Add services to the container.
 builder.Services.AddControllers();
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddSingleton<GoogleSheetsService>();
@@ -25,16 +27,16 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
 app.UseCors("AllowAll");
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-//app.UseHttpsRedirection();
+// app.UseHttpsRedirection();
 
 app.UseAuthorization();
 
