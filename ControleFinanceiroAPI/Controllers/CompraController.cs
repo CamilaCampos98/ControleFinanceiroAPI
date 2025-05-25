@@ -115,9 +115,12 @@ namespace ControleFinanceiroAPI.Controllers
                     decimal valorExtraCalculado = valorHoraExtra * entrada.HorasExtras;
 
                     // Pegar o valor extra atual para somar (coluna F)
-                    decimal extrasAtuais = 0m;
-                    if (!decimal.TryParse(entradaBase["Extras"], out extrasAtuais))
-                        extrasAtuais = 0m;
+                    var valorExtraString = entradaBase["Extras"]
+                                    .Replace(".", "")
+                                    .Replace(",", ".");
+
+                    if (!decimal.TryParse(valorExtraString, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal extrasAtuais))
+                        return BadRequest("Valor da extra inválido na base.");
 
                     decimal novosExtras = extrasAtuais + valorExtraCalculado;
 
