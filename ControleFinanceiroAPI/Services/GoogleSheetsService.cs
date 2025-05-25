@@ -77,7 +77,6 @@ public class GoogleSheetsService
     {
         var idLan = ObterProximoIdLan();
         compra.idLan = idLan;
-        compra.MesAno = compra.Data.ToString("MM/yyyy");
 
         var linhas = new List<IList<object>>();
         var valorParcela = compra.ValorTotal / compra.TotalParcelas;
@@ -93,7 +92,7 @@ public class GoogleSheetsService
             parcelaStr,
             compra.Descricao,
             valorParcela.ToString("F2"),
-            compra.MesAno,
+            dataParcela.ToString("MM/yyyy"),
             dataParcela.ToString("yyyy-MM-dd")
         });
         }
