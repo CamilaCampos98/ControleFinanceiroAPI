@@ -81,7 +81,7 @@ namespace ControleFinanceiroAPI.Controllers
                             {
                                 entrada.Pessoa,
                                 entrada.TipoEntrada,
-                                valorCalculado.ToString("F2"),
+                                valorCalculado,
                                 entrada.MesAno,
                                 entrada.ValorHora,
                                 entrada.HorasExtras,
