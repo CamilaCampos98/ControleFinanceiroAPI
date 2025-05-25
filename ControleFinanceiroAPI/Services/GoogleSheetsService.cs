@@ -5,6 +5,7 @@ using Google.Apis.Sheets.v4;
 using Google.Apis.Sheets.v4.Data;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 
 public class GoogleSheetsService
@@ -176,10 +177,12 @@ public class GoogleSheetsService
 
             var header = linhas[0];
 
-            // Leitura da aba Config para buscar o salário
-            var config = ReadData("Config!A:D");
+            // Leitura da aba Config para buscar o salário e extras
+            var config = ReadData("Config!A:F");
 
-            decimal salario = 0;
+            decimal salario = 0m;
+            decimal extras = 0m;
+
             foreach (var linha in config.Skip(1)) // Ignora o header
             {
                 var pessoaConfig = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "";
@@ -190,6 +193,10 @@ public class GoogleSheetsService
                 {
                     var salarioStr = linha.ElementAtOrDefault(2)?.ToString();
                     salario = ParseDecimal(salarioStr);
+
+                    var extrasStr = linha.ElementAtOrDefault(5)?.ToString(); // Coluna Extras, ajuste se precisar
+                    extras = ParseDecimal(extrasStr);
+
                     break;
                 }
             }
@@ -198,6 +205,8 @@ public class GoogleSheetsService
             {
                 return (false, "Salário não encontrado na aba Config para essa pessoa e período.", null);
             }
+
+            decimal totalRecebido = salario + extras;
 
             // Filtrar as compras
             var comprasFiltradas = new List<Dictionary<string, object>>();
@@ -234,13 +243,15 @@ public class GoogleSheetsService
                 }
             }
 
-            var saldoRestante = salario - totalGasto;
+            var saldoRestante = totalRecebido - totalGasto;
 
             var resultado = new
             {
                 Pessoa = pessoa,
                 Periodo = $"{inicio:dd/MM/yyyy} a {fim:dd/MM/yyyy}",
                 Salario = salario,
+                Extras = extras,
+                TotalRecebido = totalRecebido,
                 TotalGasto = totalGasto,
                 SaldoRestante = saldoRestante,
                 Compras = comprasFiltradas
@@ -254,7 +265,7 @@ public class GoogleSheetsService
         }
     }
 
-
+   
     public decimal ParseDecimal(string? valorStr)
     {
         if (string.IsNullOrWhiteSpace(valorStr))
