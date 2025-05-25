@@ -15,8 +15,9 @@ public class GoogleSheetsService
 
     private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM"; // só o ID, sem /edit
     private readonly string SheetName = "Controle";
-    static readonly string JsonFilePath = "C:\\Users\\Camila\\source\\repos\\ControleFinanceiroAPI\\ControleFinanceiroAPI\\wwwroot\\credentials.json";
 
+    static readonly string JsonFilePath = Environment.GetEnvironmentVariable("GOOGLE_SHEETS_JSON_PATH")
+                    ?? "C:\\Users\\Camila\\source\\repos\\ControleFinanceiroAPI\\ControleFinanceiroAPI\\wwwroot\\credentials.json";
     private readonly SheetsService _service;
 
     public SheetsService Connect()
