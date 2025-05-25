@@ -2,6 +2,7 @@
 using Google.Apis.Sheets.v4;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.Globalization;
 
 namespace ControleFinanceiroAPI.Controllers
 {
@@ -103,8 +104,11 @@ namespace ControleFinanceiroAPI.Controllers
                     if (entradaBase == null)
                         return BadRequest("Entrada base (salário) não encontrada para a pessoa e mês.");
 
-                    // Parse do valorHora da coluna E (valor hora base)
-                    if (!decimal.TryParse(entradaBase["ValorHora"], out decimal valorHoraExtra))
+                    var valorString = entradaBase["ValorHora"]
+                                    .Replace(".", "")
+                                    .Replace(",", ".");
+
+                    if (!decimal.TryParse(valorString, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal valorHoraExtra))
                         return BadRequest("Valor da hora inválido na base.");
 
                     // Calcular valor extra
