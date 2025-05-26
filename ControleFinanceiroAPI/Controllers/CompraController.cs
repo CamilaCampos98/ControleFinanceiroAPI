@@ -88,7 +88,50 @@ namespace ControleFinanceiroAPI.Controllers
                 return StatusCode(500, new { status = "erro", message = ex.Message });
             }
         }
+        [HttpGet("TodasComprasPorPessoa")]
+        public IActionResult GetAllComprasPorPessoa()
+        {
+            try
+            {
+                var linhas = _googleSheetsService.ReadData($"{SheetName}!A:I");
 
+                if (linhas == null || linhas.Count <= 1)
+                    return NotFound("Nenhum dado encontrado na planilha.");
+
+                // A primeira linha é o cabeçalho
+                var header = linhas[0];
+
+                var comprasPorPessoa = new Dictionary<string, List<Dictionary<string, object>>>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 1; i < linhas.Count; i++)
+                {
+                    var linha = linhas[i];
+
+                    var pessoa = linha.ElementAtOrDefault(7)?.ToString() ?? "Desconhecido";
+
+                    if (!comprasPorPessoa.ContainsKey(pessoa))
+                        comprasPorPessoa[pessoa] = new List<Dictionary<string, object>>();
+
+                    var compra = new Dictionary<string, object>();
+
+                    for (int j = 0; j < header.Count; j++)
+                    {
+                        var chave = header[j]?.ToString() ?? $"Coluna{j}";
+                        var valor = linha.ElementAtOrDefault(j) ?? "";
+                        compra[chave] = valor;
+                    }
+
+                    comprasPorPessoa[pessoa].Add(compra);
+                }
+
+                return Ok(comprasPorPessoa);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Erro ao acessar a planilha: {ex.Message}");
+            }
+        }
+        
         [HttpPost("RegistrarCompra")]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
@@ -256,50 +299,48 @@ namespace ControleFinanceiroAPI.Controllers
             }
         }
 
-        [HttpGet("TodasComprasPorPessoa")]
-        public IActionResult GetAllComprasPorPessoa()
+        [HttpPost("AtualizarFixo")]
+        public async Task<IActionResult> AtualizarFixo([FromBody] AtualizaFixoModel model)
         {
             try
             {
-                var linhas = _googleSheetsService.ReadData($"{SheetName}!A:I");
+                if (model == null || string.IsNullOrEmpty(model.Id))
+                    return BadRequest(new { status = "erro", message = "Dados inválidos" });
 
-                if (linhas == null || linhas.Count <= 1)
-                    return NotFound("Nenhum dado encontrado na planilha.");
+                // Ler os dados atuais da planilha
+                var dados = await _googleSheetsService.ObterValores();
 
-                // A primeira linha é o cabeçalho
-                var header = linhas[0];
+                if (dados == null || dados.Count == 0)
+                    return NotFound(new { status = "erro", message = "Planilha vazia" });
 
-                var comprasPorPessoa = new Dictionary<string, List<Dictionary<string, object>>>(StringComparer.OrdinalIgnoreCase);
+                // Encontrar a linha pelo Id (assumindo que Id está na coluna 0)
+                var listaDados = dados.ToList();
+                var linhaIndex = listaDados.FindIndex(row => row.Count > 0 && row[0]?.ToString() == model.Id);
 
-                for (int i = 1; i < linhas.Count; i++)
+                if (linhaIndex == -1)
+                    return NotFound(new { status = "erro", message = "Fixo não encontrado" });
+
+                var linha = dados[linhaIndex];
+
+                // Garantir que linha tenha pelo menos 7 colunas
+                while (linha.Count < 7)
                 {
-                    var linha = linhas[i];
-
-                    var pessoa = linha.ElementAtOrDefault(7)?.ToString() ?? "Desconhecido";
-
-                    if (!comprasPorPessoa.ContainsKey(pessoa))
-                        comprasPorPessoa[pessoa] = new List<Dictionary<string, object>>();
-
-                    var compra = new Dictionary<string, object>();
-
-                    for (int j = 0; j < header.Count; j++)
-                    {
-                        var chave = header[j]?.ToString() ?? $"Coluna{j}";
-                        var valor = linha.ElementAtOrDefault(j) ?? "";
-                        compra[chave] = valor;
-                    }
-
-                    comprasPorPessoa[pessoa].Add(compra);
+                    linha.Add(string.Empty);
                 }
+                // Atualizar valor e pago (colunas 5 e 6)
+                linha[5] = model.Valor.ToString("F2").Replace(",", "."); // valor decimal formatado com ponto
+                linha[6] = model.Pago ? "Sim" : "Não";
 
-                return Ok(comprasPorPessoa);
+                // Atualiza a linha na planilha (assumindo que você tem método para atualizar uma linha específica)
+                await _googleSheetsService.AtualizarLinha(linhaIndex + 1, linha);
+                // +1 porque planilha geralmente indexa linha 1 como cabeçalho
+
+                return Ok(new { status = "sucesso", message = "Fixo atualizado com sucesso" });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, $"Erro ao acessar a planilha: {ex.Message}");
+                return StatusCode(500, new { status = "erro", message = ex.Message });
             }
         }
-
-        
     }
 }

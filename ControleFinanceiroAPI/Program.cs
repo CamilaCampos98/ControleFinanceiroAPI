@@ -11,6 +11,7 @@ Console.WriteLine($"Listening on port: {port}");
 
 // Configure para escutar na porta correta
 builder.WebHost.UseUrls($"http://*:{port}");
+builder.WebHost.UseUrls($"https://*:{port}");
 
 // Add services to the container.
 builder.Services.AddControllers();
@@ -25,6 +26,7 @@ builder.Services.AddCors(options =>
               .AllowAnyMethod()
               .AllowAnyHeader());
 });
+
 
 var app = builder.Build();
 

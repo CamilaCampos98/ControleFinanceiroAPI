@@ -407,6 +407,19 @@ public class GoogleSheetsService
         var response = await request.ExecuteAsync();
         return response.Values;
     }
+
+    public async Task AtualizarLinha(int linhaNumero, IList<object> valores)
+    {
+        var range = $"Fixos!A{linhaNumero}:G{linhaNumero}"; // faixa da linha completa, ajuste colunas se quiser
+        var valueRange = new ValueRange
+        {
+            Values = new List<IList<object>> { valores }
+        };
+
+        var updateRequest = _service.Spreadsheets.Values.Update(valueRange, SpreadsheetId, range);
+        updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+        await updateRequest.ExecuteAsync();
+    }
     #endregion
 
 }
