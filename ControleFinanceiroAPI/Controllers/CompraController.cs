@@ -23,6 +23,72 @@ namespace ControleFinanceiroAPI.Controllers
             return Ok("API Funcionando");
         }
 
+        [HttpGet("ResumoPessoaPeriodo")]
+        public IActionResult GetResumoPorPessoaEPeriodo(string pessoa, string dataInicio, string dataFim)
+        {
+            if (!DateTime.TryParse(dataInicio, out DateTime inicio))
+                return BadRequest("Data de início inválida.");
+
+            if (!DateTime.TryParse(dataFim, out DateTime fim))
+                return BadRequest("Data de fim inválida.");
+
+            var (success, message, data) = _googleSheetsService.GetResumoPorPessoaEPeriodo(pessoa, inicio, fim);
+
+            if (!success)
+                return BadRequest(message);
+
+            return Ok(data);
+        }
+
+        [HttpGet("ListarFixos")]
+        public async Task<IActionResult> ListarFixos([FromQuery] string pessoa)
+        {
+            try
+            {
+                // Colunas da aba: Id, Tipo, MesAno, Pessoa, Vencimento, Valor, Pago
+                var dados = await _googleSheetsService.ObterValores();
+
+                if (dados == null || dados.Count == 0)
+                    return Ok(new List<object>());
+
+                var lista = new List<FixoModel>();
+
+                // Pula o cabeçalho, começa do índice 1
+                for (int i = 1; i < dados.Count; i++)
+                {
+                    var linha = dados[i];
+
+                    // Garante que a linha tenha 7 colunas (preenche com null se faltar)
+                    while (linha.Count < 7)
+                        linha.Add(null);
+
+                    // Se a coluna Pessoa (index 3) for diferente da pessoa buscada, pula
+                    if (linha[3]?.ToString()?.Trim().ToUpper() != pessoa.ToUpper()) continue;
+
+                    var fixo = new FixoModel
+                    {
+                        Id = long.TryParse(linha[0]?.ToString(), out var idVal) ? idVal : 0,
+                        Tipo = linha[1]?.ToString(),
+                        MesAno = linha[2]?.ToString(),
+                        Vencimento = linha[4]?.ToString(),
+                        Valor = linha[5]?.ToString()
+                                    ?.Replace("R$", "", StringComparison.OrdinalIgnoreCase)
+                                    ?.Replace(",", "")
+                                    ?.Trim(),
+                        Pago = linha[6]?.ToString()?.Trim()
+                    };
+
+                    lista.Add(fixo);
+                }
+
+                return Ok(lista);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+
         [HttpPost("RegistrarCompra")]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
@@ -151,6 +217,45 @@ namespace ControleFinanceiroAPI.Controllers
 
         }
 
+        [HttpPost("GeraFixos")]
+        public async Task<IActionResult> GeraFixos([FromBody] FixoPayload payload)
+        {
+            try
+            {
+                if (payload == null || payload.Data == null || !payload.Data.Any())
+                    return BadRequest(new { status = "erro", message = "Payload inválido ou vazio." });
+
+                if (string.IsNullOrEmpty(payload.Pessoa))
+                    return BadRequest(new { status = "erro", message = "Campo 'Pessoa' é obrigatório." });
+
+                var linhas = new List<IList<object>>();
+
+                foreach (var fixo in payload.Data)
+                {
+                    var linha = new List<object>
+                                {
+                                    fixo.Id,
+                                    fixo.Tipo,
+                                    fixo.MesAno,
+                                    payload.Pessoa,
+                                    fixo.Vencimento,
+                                    "",    // 🔸 Valor a preencher depois
+                                    ""     // 🔸 Pago a preencher depois
+                                };
+
+                    linhas.Add(linha);
+                }
+
+                await _googleSheetsService.AdicionarLinhas(linhas); 
+
+                return Ok(new { status = "sucesso", message = "Gastos fixos inseridos na planilha." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+
         [HttpGet("TodasComprasPorPessoa")]
         public IActionResult GetAllComprasPorPessoa()
         {
@@ -195,21 +300,6 @@ namespace ControleFinanceiroAPI.Controllers
             }
         }
 
-        [HttpGet("ResumoPessoaPeriodo")]
-        public IActionResult GetResumoPorPessoaEPeriodo(string pessoa, string dataInicio, string dataFim)
-        {
-            if (!DateTime.TryParse(dataInicio, out DateTime inicio))
-                return BadRequest("Data de início inválida.");
-
-            if (!DateTime.TryParse(dataFim, out DateTime fim))
-                return BadRequest("Data de fim inválida.");
-
-            var (success, message, data) = _googleSheetsService.GetResumoPorPessoaEPeriodo(pessoa, inicio, fim);
-
-            if (!success)
-                return BadRequest(message);
-
-            return Ok(data);
-        }
+        
     }
 }

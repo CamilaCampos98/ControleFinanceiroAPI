@@ -15,6 +15,7 @@ public class GoogleSheetsService
 
     private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM";
     private readonly string SheetName = "Controle";
+    private readonly string rangeFixo = "Fixos!A:G";
 
     private readonly SheetsService _service;
 
@@ -386,5 +387,26 @@ public class GoogleSheetsService
         updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
         updateRequest.Execute();
     }
+
+    #region FIXOS
+    public async Task AdicionarLinhas(IList<IList<object>> valores)
+    {
+        var valueRange = new ValueRange
+        {
+            Values = valores
+        };
+
+        var appendRequest = _service.Spreadsheets.Values.Append(valueRange, SpreadsheetId, rangeFixo);
+        appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
+        await appendRequest.ExecuteAsync();
+    }
+
+    public async Task<IList<IList<object>>> ObterValores()
+    {
+        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, rangeFixo);
+        var response = await request.ExecuteAsync();
+        return response.Values;
+    }
+    #endregion
 
 }
