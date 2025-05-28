@@ -17,7 +17,7 @@ namespace ControleFinanceiroAPI.Controllers
             _googleSheetsService = googleSheetsService;
         }
 
-        [HttpGet]
+        [HttpGet("Get")]
         public IActionResult Get()
         {
             return Ok("API Funcionando");
