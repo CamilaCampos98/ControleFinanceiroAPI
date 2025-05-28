@@ -244,6 +244,39 @@ public class GoogleSheetsService
                 }
             }
 
+            decimal totalGastoFixos = 0;
+            // --- Novo: Ler dados da aba Fixos e somar os valores da coluna 5 para a mesma pessoa e período ---
+            var linhasFixos = ReadData(rangeFixo); 
+
+            if (linhasFixos != null && linhasFixos.Count > 1)
+            {
+                for (int i = 1; i < linhasFixos.Count; i++)
+                {
+                    var linhaFixo = linhasFixos[i];
+
+                    var pessoaFixo = linhaFixo.ElementAtOrDefault(3)?.ToString()?.Trim() ?? ""; 
+                    var mesAnoFixo = linhaFixo.ElementAtOrDefault(2)?.ToString()?.Trim() ?? ""; 
+
+                    if (!string.Equals(pessoaFixo, pessoa, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    // Verifica se o MesAno da linha fixa está dentro do período
+                    // Como MesAno é MM/yyyy, vamos comparar com inicio e fim:
+                    if (DateTime.TryParseExact(mesAnoFixo, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoData))
+                    {
+                        // Só soma se o MesAno estiver dentro do período (mes e ano)
+                        if (mesAnoData >= new DateTime(inicio.Year, inicio.Month, 1) && mesAnoData <= new DateTime(fim.Year, fim.Month, 1))
+                        {
+                            var valorFixoStr = linhaFixo.ElementAtOrDefault(5)?.ToString(); // Coluna Valor índice 5
+                            var valorFixo = ParseDecimal(valorFixoStr);
+                            totalGasto += valorFixo;
+                            totalGastoFixos += valorFixo;
+                        }
+                    }
+                }
+            }
+            // --- Fim do novo ---
+
             var saldoRestante = totalRecebido - totalGasto;
 
             var resultado = new
@@ -255,7 +288,8 @@ public class GoogleSheetsService
                 TotalRecebido = totalRecebido,
                 TotalGasto = totalGasto,
                 SaldoRestante = saldoRestante,
-                Compras = comprasFiltradas
+                Compras = comprasFiltradas,
+                GastosFixos = totalGastoFixos
             };
 
             return (true, "Sucesso", resultado);
@@ -266,24 +300,70 @@ public class GoogleSheetsService
         }
     }
 
-   
-    public decimal ParseDecimal(string? valorStr)
+
+
+    public decimal ParseDecimal(string? input)
     {
-        if (string.IsNullOrWhiteSpace(valorStr))
+        if (string.IsNullOrWhiteSpace(input))
             return 0;
 
-        valorStr = valorStr.Replace("R$", "")
-                            .Replace(".", "")   // Remove separadores de milhar
-                            .Replace(",", ".")  // Troca vírgula decimal por ponto
-                            .Trim();
+        input = input.Replace("R$", "").Trim();
 
-        if (decimal.TryParse(valorStr,
-                              System.Globalization.NumberStyles.Any,
-                              System.Globalization.CultureInfo.InvariantCulture,
-                              out decimal valor))
+        // Remove espaços
+        input = input.Replace(" ", "");
+
+        // Conta quantas vírgulas e pontos existem
+        int commaCount = input.Count(c => c == ',');
+        int dotCount = input.Count(c => c == '.');
+
+        // Cenário 1: ambos existem
+        if (commaCount > 0 && dotCount > 0)
         {
-            return valor;
+            // Assume que o separador decimal é o último deles
+            if (input.LastIndexOf(",") > input.LastIndexOf("."))
+            {
+                // Vírgula é decimal → ponto é milhar
+                input = input.Replace(".", "");
+                input = input.Replace(",", ".");
+            }
+            else
+            {
+                // Ponto é decimal → vírgula é milhar
+                input = input.Replace(",", "");
+            }
         }
+        // Cenário 2: só vírgula
+        else if (commaCount > 0)
+        {
+            if (input.LastIndexOf(",") >= input.Length - 3)
+            {
+                // vírgula é decimal
+                input = input.Replace(".", "");
+                input = input.Replace(",", ".");
+            }
+            else
+            {
+                // vírgula é milhar (raro, mas possível)
+                input = input.Replace(",", "");
+            }
+        }
+        // Cenário 3: só ponto
+        else if (dotCount > 0)
+        {
+            if (input.LastIndexOf(".") >= input.Length - 3)
+            {
+                // ponto é decimal
+                input = input.Replace(",", "");
+            }
+            else
+            {
+                // ponto é milhar
+                input = input.Replace(".", "");
+            }
+        }
+
+        if (decimal.TryParse(input, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal result))
+            return result;
 
         return 0;
     }
@@ -401,6 +481,26 @@ public class GoogleSheetsService
         await appendRequest.ExecuteAsync();
     }
 
+    public async Task InserirLinhaAsync(LinhaGastoModel model)
+    {
+        var valores = new List<IList<object>>
+                    {
+                        new List<object>
+                        {
+                            model.Id,       
+                            model.Tipo,   
+                            model.MesAno,
+                            model.Pessoa,
+                            model.Vencimento,  
+                            model.Valor.ToString(),       
+                            model.Pago == false ? "Não" : "Sim",        
+                            
+                        }
+                    };
+
+        await AdicionarLinhas(valores);
+    }
+
     public async Task<IList<IList<object>>> ObterValores()
     {
         var request = _service.Spreadsheets.Values.Get(SpreadsheetId, rangeFixo);
@@ -420,6 +520,86 @@ public class GoogleSheetsService
         updateRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
         await updateRequest.ExecuteAsync();
     }
+
+    public (bool Success, string Message, LinhaGastoModel? Data) GetLinhaPorId(string id)
+    {
+        try
+        {
+            var linhas = ReadData(rangeFixo);
+
+            if (linhas == null || linhas.Count <= 1)
+                return (false, "Nenhum dado encontrado na planilha.", null);
+
+            var header = linhas[0];
+
+            for (int i = 1; i < linhas.Count; i++)
+            {
+                var linha = linhas[i];
+
+                var idLinha = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "";
+
+                if (idLinha.Equals(id, StringComparison.OrdinalIgnoreCase))
+                {
+                    var gasto = new LinhaGastoModel
+                    {
+                        Id = Convert.ToInt64(idLinha),
+                        Tipo = linha.ElementAtOrDefault(1)?.ToString() ?? "",
+                        MesAno = linha.ElementAtOrDefault(2)?.ToString() ?? "",
+                        Pessoa = linha.ElementAtOrDefault(3)?.ToString() ?? "",
+                        Vencimento = linha.ElementAtOrDefault(4)?.ToString(),
+                        Valor = ParseDecimal(linha.ElementAtOrDefault(5)?.ToString()),
+                        Pago = (linha.ElementAtOrDefault(6)?.ToString()?.Trim().ToLower() == "true")
+                        
+                    };
+
+                    return (true, "Linha encontrada com sucesso.", gasto);
+                }
+            }
+
+            return (false, "Linha não encontrada.", null);
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Erro ao acessar a planilha: {ex.Message}", null);
+        }
+    }
+
+    public async Task<bool> AtualizarLinhaPorIdAsync(string id, decimal novoValor)
+    {
+        // Lê todas as linhas da aba
+        var linhas = ReadData(rangeFixo);
+
+        if (linhas == null || linhas.Count <= 1)
+            return false;
+
+        var header = linhas[0]; // Cabeçalho
+
+        // Procura a linha pelo ID (assumindo que ID está na coluna 0)
+        for (int i = 1; i < linhas.Count; i++)
+        {
+            var linha = linhas[i];
+            var idLinha = linha.ElementAtOrDefault(0)?.ToString()?.Trim();
+
+            if (string.Equals(idLinha, id, StringComparison.OrdinalIgnoreCase))
+            {
+                int numeroDaLinhaNaPlanilha = i + 1; // +1 porque a contagem na planilha começa em 1
+
+                // Garante que a linha tenha pelo menos 7 colunas
+                while (linha.Count < 7)
+                    linha.Add("");
+
+                // Atualiza o valor na coluna 5 (índice 5, que é a 6ª coluna → "Valor")
+                linha[5] = novoValor.ToString(CultureInfo.InvariantCulture).ToString();
+
+                await AtualizarLinha(numeroDaLinhaNaPlanilha, linha);
+                return true;
+            }
+        }
+
+        return false; // Não encontrou o ID
+    }
+
+
     #endregion
 
 }

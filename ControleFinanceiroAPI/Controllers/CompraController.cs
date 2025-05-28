@@ -131,7 +131,7 @@ namespace ControleFinanceiroAPI.Controllers
                 return StatusCode(500, $"Erro ao acessar a planilha: {ex.Message}");
             }
         }
-        
+
         [HttpPost("RegistrarCompra")]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
@@ -289,7 +289,7 @@ namespace ControleFinanceiroAPI.Controllers
                     linhas.Add(linha);
                 }
 
-                await _googleSheetsService.AdicionarLinhas(linhas); 
+                await _googleSheetsService.AdicionarLinhas(linhas);
 
                 return Ok(new { status = "sucesso", message = "Gastos fixos inseridos na planilha." });
             }
@@ -342,5 +342,49 @@ namespace ControleFinanceiroAPI.Controllers
                 return StatusCode(500, new { status = "erro", message = ex.Message });
             }
         }
+
+
+        [HttpPost("DividirGasto")]
+        public async Task<IActionResult> DividirGasto([FromBody] DividirGastoModel request)
+        {
+            var (success, message, linha) = _googleSheetsService.GetLinhaPorId(request.IdLinha);
+
+            if (!success || linha == null)
+                return NotFound(message);
+
+            decimal valorAtual = linha.Valor;
+
+            if (request.ValorDividir <= 0)
+                return BadRequest("O valor deve ser maior que zero.");
+
+            if (request.ValorDividir > valorAtual)
+                return BadRequest("O valor para dividir é maior que o valor atual.");
+
+            // 🔻 Atualiza o valor da linha original
+            decimal novoValor = valorAtual - request.ValorDividir;
+            await _googleSheetsService.AtualizarLinhaPorIdAsync(request.IdLinha, novoValor);
+
+            // ➕ Cria a nova linha para quem vai receber o valor dividido
+            var novaLinha = new LinhaGastoModel
+            {
+                Id = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + new Random().Next(1000, 9999),
+                Tipo = linha.Tipo,
+                MesAno = linha.MesAno,
+                Vencimento = linha.Vencimento = $"{DateTime.Today.Year}-{DateTime.Today.Month.ToString("D2")}-15",
+                Valor = request.ValorDividir,
+                Pago = linha.Pago,
+                Pessoa = request.NomeDestino
+            };
+
+            await _googleSheetsService.InserirLinhaAsync(novaLinha);
+
+            return Ok(new
+            {
+                mensagem = "Gasto dividido com sucesso.",
+                linhaAtualizada = new { linha.Id, novoValor },
+                novaLinha = novaLinha
+            });
+        }
     }
 }
+
