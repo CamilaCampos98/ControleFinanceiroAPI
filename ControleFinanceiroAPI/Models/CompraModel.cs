@@ -11,5 +11,6 @@
         public DateTime Data { get; set; }
         public string Pessoa { get; set; } = string.Empty;  // ✅ Novo
         public string Fonte { get; set; } = string.Empty;   // ✅ Novo
+        public string Cartao { get; set; } = string.Empty;   // ✅ Novo
     }
 }

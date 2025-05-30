@@ -171,7 +171,7 @@ public class GoogleSheetsService
     {
         try
         {
-            var linhas = ReadData($"{SheetName}!A:I");
+            var linhas = ReadData($"{SheetName}!A:J");
 
             if (linhas == null || linhas.Count <= 1)
                 return (false, "Nenhum dado encontrado na planilha.", null);
@@ -211,6 +211,9 @@ public class GoogleSheetsService
 
             // Filtrar as compras
             var comprasFiltradas = new List<Dictionary<string, object>>();
+            var resumoPorCartao = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            var resumoPorCartaoTipo = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+
             decimal totalGasto = 0;
 
             for (int i = 1; i < linhas.Count; i++)
@@ -219,9 +222,7 @@ public class GoogleSheetsService
 
                 var pessoaLinha = linha.ElementAtOrDefault(7)?.ToString()?.Trim() ?? "";
                 var dataStr = linha.ElementAtOrDefault(6)?.ToString()?.Trim() ?? "";
-
-                if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
-                    continue;
+                var cartao = linha.ElementAtOrDefault(9)?.ToString()?.Trim() ?? "";
 
                 if (!DateTime.TryParse(dataStr, out DateTime dataCompra))
                     continue;
@@ -230,17 +231,56 @@ public class GoogleSheetsService
                 {
                     var valorStr = linha.ElementAtOrDefault(4)?.ToString();
                     var valor = ParseDecimal(valorStr);
-                    totalGasto += valor;
 
-                    var compra = new Dictionary<string, object>();
-                    for (int j = 0; j < header.Count; j++)
+                    // ----------- Preenche comprasFiltradas (filtrando por pessoa) ------------
+                    if (string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
                     {
-                        var chave = header[j]?.ToString() ?? $"Coluna{j}";
-                        var valorCelula = linha.ElementAtOrDefault(j) ?? "";
-                        compra[chave] = valorCelula;
+                        totalGasto += valor;
+
+                        var compra = new Dictionary<string, object>();
+                        for (int j = 0; j < header.Count; j++)
+                        {
+                            var chave = header[j]?.ToString() ?? $"Coluna{j}";
+                            var valorCelula = linha.ElementAtOrDefault(j) ?? "";
+                            compra[chave] = valorCelula;
+                        }
+
+                        comprasFiltradas.Add(compra);
                     }
 
-                    comprasFiltradas.Add(compra);
+                    // ----------- Agrupa por cartão base (sem titular/adicional) ------------
+                    if (!string.IsNullOrEmpty(cartao))
+                    {
+                        string cartaoBase = RemoverPalavras(cartao); // Remove "Titular"/"Adicional"
+
+                        // Se for cartão Bradesco, só soma se a pessoa for igual à do filtro
+                        if (cartaoBase.Equals("Bradesco", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Ignora essa compra para Bradesco se a pessoa for diferente
+                                continue;
+                            }
+                        }
+
+                        // Soma no total do cartão
+                        if (resumoPorCartao.ContainsKey(cartaoBase))
+                            resumoPorCartao[cartaoBase] += valor;
+                        else
+                            resumoPorCartao[cartaoBase] = valor;
+
+                        // ----------- Agrupa também por tipo (Titular ou Adicional) ------------
+                        string tipo = cartao.Contains("Adicional", StringComparison.OrdinalIgnoreCase) ? "Adicional" :
+                                      cartao.Contains("Titular", StringComparison.OrdinalIgnoreCase) ? "Titular" : "Outro";
+
+                        // Cria chave no formato CartaoBase|Tipo
+                        string chave = $"{cartaoBase}|{tipo}";
+
+                        if (resumoPorCartaoTipo.ContainsKey(chave))
+                            resumoPorCartaoTipo[chave] += valor;
+                        else
+                            resumoPorCartaoTipo[chave] = valor;
+                    }
                 }
             }
 
@@ -277,6 +317,18 @@ public class GoogleSheetsService
             }
             // --- Fim do novo ---
 
+            var listaCartaoTipo = resumoPorCartaoTipo.Select(item =>
+            {
+                var partes = item.Key.Split('|');
+                return new CartaoTipoResumo
+                {
+                    Cartao = partes.ElementAtOrDefault(0) ?? "Desconhecido",
+                    Tipo = partes.ElementAtOrDefault(1) ?? "Desconhecido",
+                    Valor = item.Value
+                };
+            }).OrderBy(x => x.Cartao).ToList();
+
+
             var saldoRestante = totalRecebido - totalGasto;
 
             var resultado = new
@@ -289,7 +341,9 @@ public class GoogleSheetsService
                 TotalGasto = totalGasto,
                 SaldoRestante = saldoRestante,
                 Compras = comprasFiltradas,
-                GastosFixos = totalGastoFixos
+                GastosFixos = totalGastoFixos,
+                resumoPorCartao = resumoPorCartao,
+                resumoPorCartaoTipo = listaCartaoTipo
             };
 
             return (true, "Sucesso", resultado);
@@ -300,7 +354,40 @@ public class GoogleSheetsService
         }
     }
 
+    public class TupleStringIgnoreCaseComparer : IEqualityComparer<(string, string)>
+    {
+        public bool Equals((string, string) x, (string, string) y)
+        {
+            return string.Equals(x.Item1, y.Item1, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(x.Item2, y.Item2, StringComparison.OrdinalIgnoreCase);
+        }
 
+        public int GetHashCode((string, string) obj)
+        {
+            return HashCode.Combine(
+                obj.Item1?.ToLowerInvariant() ?? "",
+                obj.Item2?.ToLowerInvariant() ?? ""
+            );
+        }
+    }
+    public static string RemoverPalavras(string texto)
+    {
+        if (string.IsNullOrEmpty(texto))
+            return texto;
+
+        var palavrasParaRemover = new List<string> { "Titular", "Adicional" };
+
+        foreach (var palavra in palavrasParaRemover)
+        {
+            texto = System.Text.RegularExpressions.Regex.Replace(
+                texto,
+                System.Text.RegularExpressions.Regex.Escape(palavra),
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
+        return texto.Trim();
+    }
 
     public decimal ParseDecimal(string? input)
     {
@@ -368,7 +455,12 @@ public class GoogleSheetsService
         return 0;
     }
 
-
+    internal class CartaoTipoResumo
+    {
+        public string? Cartao { get; set; }
+        public string? Tipo { get; set; }
+        public decimal Valor { get; set; }
+    }
     public void WriteEntrada(List<object> entrada)
     {
         var valueRange = new ValueRange { Values = new List<IList<object>> { entrada } };
