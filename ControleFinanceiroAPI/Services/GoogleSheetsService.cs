@@ -354,22 +354,6 @@ public class GoogleSheetsService
         }
     }
 
-    public class TupleStringIgnoreCaseComparer : IEqualityComparer<(string, string)>
-    {
-        public bool Equals((string, string) x, (string, string) y)
-        {
-            return string.Equals(x.Item1, y.Item1, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(x.Item2, y.Item2, StringComparison.OrdinalIgnoreCase);
-        }
-
-        public int GetHashCode((string, string) obj)
-        {
-            return HashCode.Combine(
-                obj.Item1?.ToLowerInvariant() ?? "",
-                obj.Item2?.ToLowerInvariant() ?? ""
-            );
-        }
-    }
     public static string RemoverPalavras(string texto)
     {
         if (string.IsNullOrEmpty(texto))

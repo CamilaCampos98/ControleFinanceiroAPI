@@ -260,6 +260,7 @@ namespace ControleFinanceiroAPI.Controllers
 
         }
 
+        #region FIXOS
         [HttpPost("GeraFixos")]
         public async Task<IActionResult> GeraFixos([FromBody] FixoPayload payload)
         {
@@ -343,7 +344,6 @@ namespace ControleFinanceiroAPI.Controllers
             }
         }
 
-
         [HttpPost("DividirGasto")]
         public async Task<IActionResult> DividirGasto([FromBody] DividirGastoModel request)
         {
@@ -385,6 +385,53 @@ namespace ControleFinanceiroAPI.Controllers
                 novaLinha = novaLinha
             });
         }
+
+        [HttpGet("BuscaDataRef")]
+        public async Task<IActionResult> BuscaDataRef()
+        {
+            try
+            {
+                var dados = _googleSheetsService.ReadData("Config!A:F");
+
+                if (dados == null || dados.Count == 0)
+                    return NotFound(new { status = "erro", message = "Nenhum dado encontrado." });
+
+                // Pega a coluna 3 (índice 2), ignora cabeçalhos e linhas sem valor
+                var datas = dados
+                    .Skip(1) // se a primeira linha é cabeçalho, senão remova essa linha
+                    .Select(linha => linha.Count > 3 ? linha[3]?.ToString() : null)
+                    .Where(mesAno => !string.IsNullOrWhiteSpace(mesAno))
+                    .Select(mesAno =>
+                    {
+                        // Tenta converter para DateTime no formato MM/yyyy
+                        if (DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                            return dt;
+                        else
+                            return (DateTime?)null;
+                    })
+                    .Where(dt => dt.HasValue)
+                    .Select(dt => dt.Value)
+                    .ToList();
+
+                if (!datas.Any())
+                    return NotFound(new { status = "erro", message = "Nenhuma data válida encontrada." });
+
+                // Pega a data mais recente
+                var dataMaisRecente = datas.Max();
+
+                // Retorna no mesmo formato "MM/yyyy"
+                var mesAnoMaisRecente = dataMaisRecente.ToString("MM/yyyy");
+
+                return Ok(new { status = "sucesso", mesAno = mesAnoMaisRecente });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+        #endregion
+
+
     }
 }
 
