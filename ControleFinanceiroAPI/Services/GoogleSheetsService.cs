@@ -354,6 +354,132 @@ public class GoogleSheetsService
         }
     }
 
+    public (bool Success, string Message, List<ResumoPessoaDTO>? Data) ResumoGeral()
+    {
+        try
+        {
+            var linhas = ReadData($"{SheetName}!A:J");
+            if (linhas == null || linhas.Count <= 1)
+                return (false, "Nenhum dado encontrado na planilha.", null);
+
+            var header = linhas[0];
+
+            // Ler Config
+            var config = ReadData("Config!A:F");
+            if (config == null || config.Count <= 1)
+                return (false, "Nenhum dado encontrado na aba Config.", null);
+
+            // Ler Fixos
+            var linhasFixos = ReadData(rangeFixo);
+
+            // Descobrir todas as pessoas na aba Config
+            var pessoas = config.Skip(1)
+                                .Select(l => l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "")
+                                .Where(p => !string.IsNullOrEmpty(p))
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToList();
+
+            var resultado = new List<ResumoPessoaDTO>();
+
+            foreach (var pessoa in pessoas)
+            {
+                // 🔍 Descobrir o mês mais recente para essa pessoa
+                var linhasPessoaConfig = config.Skip(1)
+                    .Where(l => string.Equals(l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "", pessoa, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                var mesAnoMaisRecente = linhasPessoaConfig
+                    .Select(l => l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "")
+                    .Where(m => DateTime.TryParseExact(m, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                    .Select(m => DateTime.ParseExact(m, "MM/yyyy", CultureInfo.InvariantCulture))
+                    .OrderByDescending(d => d)
+                    .FirstOrDefault();
+
+                if (mesAnoMaisRecente == DateTime.MinValue)
+                    continue; // Pessoa sem mesAno válido
+
+                // 💰 Pega salário e extras do mês mais recente
+                var linhaSalario = linhasPessoaConfig
+                    .FirstOrDefault(l => (l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "") == mesAnoMaisRecente.ToString("MM/yyyy"));
+
+                decimal salario = ParseDecimal(linhaSalario?.ElementAtOrDefault(2)?.ToString());
+                decimal extras = ParseDecimal(linhaSalario?.ElementAtOrDefault(5)?.ToString());
+
+                decimal totalRecebido = salario + extras;
+
+                // 📆 Definir intervalo do mês
+                var inicioMes = new DateTime(mesAnoMaisRecente.Year, mesAnoMaisRecente.Month, 1);
+                var fimMes = inicioMes.AddMonths(1).AddDays(-1);
+
+                // 🛒 Buscar Compras
+                var comprasPessoa = linhas.Skip(1)
+                    .Where(l =>
+                    {
+                        var dataStr = l.ElementAtOrDefault(6)?.ToString()?.Trim() ?? "";
+                        var pessoaLinha = l.ElementAtOrDefault(7)?.ToString()?.Trim() ?? "";
+
+                        if (!DateTime.TryParse(dataStr, out DateTime dataCompra))
+                            return false;
+
+                        return string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase) &&
+                               dataCompra >= inicioMes && dataCompra <= fimMes;
+                    })
+                    .Select(l => new
+                    {
+                        Data = DateTime.TryParse(l.ElementAtOrDefault(6)?.ToString()?.Trim(), out DateTime d) ? d : (DateTime?)null,
+                        Descricao = l.ElementAtOrDefault(3)?.ToString() ?? "",
+                        Valor = ParseDecimal(l.ElementAtOrDefault(4)?.ToString())
+                    })
+                    .ToList();
+
+                decimal totalGastosCompras = comprasPessoa.Sum(c => c.Valor);
+
+                // 🏠 Buscar Fixos
+                decimal totalGastosFixos = 0;
+                if (linhasFixos != null && linhasFixos.Count > 1)
+                {
+                    totalGastosFixos = linhasFixos.Skip(1)
+                        .Where(l =>
+                        {
+                            var pessoaLinha = l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
+                            var mesAnoFixo = l.ElementAtOrDefault(2)?.ToString()?.Trim() ?? "";
+
+                            if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
+                                return false;
+
+                            if (!DateTime.TryParseExact(mesAnoFixo, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoData))
+                                return false;
+
+                            return mesAnoData.Year == mesAnoMaisRecente.Year && mesAnoData.Month == mesAnoMaisRecente.Month;
+                        })
+                        .Sum(l => ParseDecimal(l.ElementAtOrDefault(5)?.ToString()));
+                }
+
+                // 🧮 Calcular saldo
+                decimal totalGastos = totalGastosCompras + totalGastosFixos;
+                decimal saldoRestante = totalRecebido - totalGastos;
+
+                // 📅 Descobrir última compra
+                var ultimaCompra = comprasPessoa.OrderByDescending(c => c.Data)
+                    .FirstOrDefault();
+
+                resultado.Add(new ResumoPessoaDTO
+                {
+                    Pessoa = pessoa,
+                    SaldoRestante = saldoRestante,
+                    UltimaCompra = ultimaCompra?.Data?.ToString("dd/MM/yyyy") ?? "-",
+                    DescricaoUltimaCompra = ultimaCompra?.Descricao ?? "-"
+                });
+            }
+
+            return (true, "Sucesso", resultado.OrderBy(x => x.Pessoa).ToList());
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Erro: {ex.Message}", null);
+        }
+    }
+
     public static string RemoverPalavras(string texto)
     {
         if (string.IsNullOrEmpty(texto))
@@ -439,12 +565,7 @@ public class GoogleSheetsService
         return 0;
     }
 
-    internal class CartaoTipoResumo
-    {
-        public string? Cartao { get; set; }
-        public string? Tipo { get; set; }
-        public decimal Valor { get; set; }
-    }
+   
     public void WriteEntrada(List<object> entrada)
     {
         var valueRange = new ValueRange { Values = new List<IList<object>> { entrada } };
@@ -678,4 +799,18 @@ public class GoogleSheetsService
 
     #endregion
 
+
+    internal class CartaoTipoResumo
+    {
+        public string? Cartao { get; set; }
+        public string? Tipo { get; set; }
+        public decimal Valor { get; set; }
+    }
+    public class ResumoPessoaDTO
+    {
+        public string Pessoa { get; set; } = "";
+        public decimal SaldoRestante { get; set; }
+        public string UltimaCompra { get; set; } = "-";
+        public string DescricaoUltimaCompra { get; set; } = "-";
+    }
 }

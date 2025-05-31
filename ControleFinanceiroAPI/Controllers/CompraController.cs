@@ -22,6 +22,16 @@ namespace ControleFinanceiroAPI.Controllers
         {
             return Ok("API Funcionando");
         }
+        [HttpGet("ResumoGeral")]
+        public IActionResult ResumoGeral()
+        {
+            var (success, message, data) = _googleSheetsService.ResumoGeral();
+
+            if (!success)
+                return BadRequest(message);
+
+            return Ok(data);
+        }
 
         [HttpGet("ResumoPessoaPeriodo")]
         public IActionResult GetResumoPorPessoaEPeriodo(string pessoa, string dataInicio, string dataFim)
