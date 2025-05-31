@@ -362,56 +362,63 @@ public class GoogleSheetsService
             if (linhas == null || linhas.Count <= 1)
                 return (false, "Nenhum dado encontrado na planilha.", null);
 
-            var header = linhas[0];
-
-            // Ler Config
             var config = ReadData("Config!A:F");
             if (config == null || config.Count <= 1)
                 return (false, "Nenhum dado encontrado na aba Config.", null);
 
-            // Ler Fixos
             var linhasFixos = ReadData(rangeFixo);
 
-            // Descobrir todas as pessoas na aba Config
             var pessoas = config.Skip(1)
-                                .Select(l => l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "")
-                                .Where(p => !string.IsNullOrEmpty(p))
-                                .Distinct(StringComparer.OrdinalIgnoreCase)
-                                .ToList();
+                .Select(l => l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "")
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // 📅 Definir mês vigente baseado na data atual e regra do dia 8
+            DateTime hoje = DateTime.Today;
+            DateTime mesVigente;
+
+            if (hoje.Day <= 8)
+                mesVigente = hoje.AddMonths(-1);
+            else
+                mesVigente = hoje;
+
+            int mes = mesVigente.Month;
+            int ano = mesVigente.Year;
 
             var resultado = new List<ResumoPessoaDTO>();
 
             foreach (var pessoa in pessoas)
             {
-                // 🔍 Descobrir o mês mais recente para essa pessoa
-                var linhasPessoaConfig = config.Skip(1)
-                    .Where(l => string.Equals(l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "", pessoa, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
+                // 🔍 Buscar configs da pessoa no mês vigente
+                var linhaSalario = config.Skip(1)
+                    .FirstOrDefault(l =>
+                    {
+                        var pessoaLinha = l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "";
+                        var mesAnoStr = l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
 
-                var mesAnoMaisRecente = linhasPessoaConfig
-                    .Select(l => l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "")
-                    .Where(m => DateTime.TryParseExact(m, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
-                    .Select(m => DateTime.ParseExact(m, "MM/yyyy", CultureInfo.InvariantCulture))
-                    .OrderByDescending(d => d)
-                    .FirstOrDefault();
+                        if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
+                            return false;
 
-                if (mesAnoMaisRecente == DateTime.MinValue)
-                    continue; // Pessoa sem mesAno válido
+                        if (!DateTime.TryParseExact(mesAnoStr, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoData))
+                            return false;
 
-                // 💰 Pega salário e extras do mês mais recente
-                var linhaSalario = linhasPessoaConfig
-                    .FirstOrDefault(l => (l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "") == mesAnoMaisRecente.ToString("MM/yyyy"));
+                        return mesAnoData.Month == mes && mesAnoData.Year == ano;
+                    });
+
+                if (linhaSalario == null)
+                    continue; // Se não achou, ignora a pessoa
 
                 decimal salario = ParseDecimal(linhaSalario?.ElementAtOrDefault(2)?.ToString());
                 decimal extras = ParseDecimal(linhaSalario?.ElementAtOrDefault(5)?.ToString());
 
                 decimal totalRecebido = salario + extras;
 
-                // 📆 Definir intervalo do mês
-                var inicioMes = new DateTime(mesAnoMaisRecente.Year, mesAnoMaisRecente.Month, 1);
+                // 📆 Intervalo do mês vigente
+                var inicioMes = new DateTime(ano, mes, 1);
                 var fimMes = inicioMes.AddMonths(1).AddDays(-1);
 
-                // 🛒 Buscar Compras
+                // 🛒 Compras
                 var comprasPessoa = linhas.Skip(1)
                     .Where(l =>
                     {
@@ -434,7 +441,7 @@ public class GoogleSheetsService
 
                 decimal totalGastosCompras = comprasPessoa.Sum(c => c.Valor);
 
-                // 🏠 Buscar Fixos
+                // 🏠 Fixos
                 decimal totalGastosFixos = 0;
                 if (linhasFixos != null && linhasFixos.Count > 1)
                 {
@@ -450,7 +457,7 @@ public class GoogleSheetsService
                             if (!DateTime.TryParseExact(mesAnoFixo, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoData))
                                 return false;
 
-                            return mesAnoData.Year == mesAnoMaisRecente.Year && mesAnoData.Month == mesAnoMaisRecente.Month;
+                            return mesAnoData.Year == ano && mesAnoData.Month == mes;
                         })
                         .Sum(l => ParseDecimal(l.ElementAtOrDefault(5)?.ToString()));
                 }
@@ -459,7 +466,7 @@ public class GoogleSheetsService
                 decimal totalGastos = totalGastosCompras + totalGastosFixos;
                 decimal saldoRestante = totalRecebido - totalGastos;
 
-                // 📅 Descobrir última compra
+                // 📅 Última compra
                 var ultimaCompra = comprasPessoa.OrderByDescending(c => c.Data)
                     .FirstOrDefault();
 
@@ -479,6 +486,7 @@ public class GoogleSheetsService
             return (false, $"Erro: {ex.Message}", null);
         }
     }
+
 
     public static string RemoverPalavras(string texto)
     {
@@ -666,6 +674,12 @@ public class GoogleSheetsService
     }
 
     #region FIXOS
+
+    public async Task DeletarLinha(int rowIndex)
+    {
+        var request = _service.Spreadsheets.Values.Clear(new ClearValuesRequest(), SpreadsheetId, $"{"Fixos"}!A{rowIndex}:H{rowIndex}");
+        await request.ExecuteAsync();
+    }
     public async Task AdicionarLinhas(IList<IList<object>> valores)
     {
         var valueRange = new ValueRange

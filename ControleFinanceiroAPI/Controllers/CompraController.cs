@@ -284,28 +284,105 @@ namespace ControleFinanceiroAPI.Controllers
                 if (string.IsNullOrEmpty(payload.Pessoa))
                     return BadRequest(new { status = "erro", message = "Campo 'Pessoa' é obrigatório." });
 
-                var linhas = new List<IList<object>>();
+                // 🔍 Ler dados atuais da planilha
+                var linhasAtuais = await _googleSheetsService.ObterValores();
+
+                var linhasParaInserir = new List<IList<object>>();
+                var fixosInseridos = new List<object>();
+                var fixosIgnorados = new List<object>();
 
                 foreach (var fixo in payload.Data)
                 {
-                    var linha = new List<object>
-                                {
-                                    fixo.Id,
-                                    fixo.Tipo,
-                                    fixo.MesAno,
-                                    payload.Pessoa,
-                                    fixo.Vencimento,
-                                    "",    // 🔸 Valor a preencher depois
-                                    ""  ,   // 🔸 Pago a preencher depois
-                                    fixo.Dividido
-                                };
+                    bool jaExiste = linhasAtuais.Skip(1).Any(l =>
+                    {
+                        var tipo = l.ElementAtOrDefault(1)?.ToString()?.Trim();
+                        var mesAno = l.ElementAtOrDefault(2)?.ToString()?.Trim();
+                        var pessoa = l.ElementAtOrDefault(3)?.ToString()?.Trim();
 
-                    linhas.Add(linha);
+                        return string.Equals(tipo, fixo.Tipo, StringComparison.OrdinalIgnoreCase) &&
+                               string.Equals(mesAno, fixo.MesAno, StringComparison.OrdinalIgnoreCase) &&
+                               string.Equals(pessoa, payload.Pessoa, StringComparison.OrdinalIgnoreCase);
+                    });
+
+                    var resumo = new
+                    {
+                        fixo.Tipo,
+                        fixo.MesAno,
+                        Pessoa = payload.Pessoa
+                    };
+
+                    if (jaExiste)
+                    {
+                        fixosIgnorados.Add(resumo);
+                        continue; // 🔸 Pula se já existe
+                    }
+
+                    var linha = new List<object>
+                        {
+                            fixo.Id,
+                            fixo.Tipo,
+                            fixo.MesAno,
+                            payload.Pessoa,
+                            fixo.Vencimento,
+                            "",    // 🔸 Valor (a preencher depois)
+                            "",    // 🔸 Pago (a preencher depois)
+                            fixo.Dividido
+                        };
+
+                    linhasParaInserir.Add(linha);
+                    fixosInseridos.Add(resumo);
                 }
 
-                await _googleSheetsService.AdicionarLinhas(linhas);
+                if (linhasParaInserir.Any())
+                {
+                    await _googleSheetsService.AdicionarLinhas(linhasParaInserir);
+                }
 
-                return Ok(new { status = "sucesso", message = "Gastos fixos inseridos na planilha." });
+                return Ok(new
+                {
+                    status = "sucesso",
+                    message = linhasParaInserir.Any() ? "Processo concluído com sucesso." : "Nenhum fixo novo para inserir.",
+                    inseridos = fixosInseridos,
+                    ignorados = fixosIgnorados
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+
+        [HttpPost("DeletarFixo")]
+        public async Task<IActionResult> DeletarFixo([FromBody] DeletarFixoPayload payload)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(payload.Id) ||
+                    string.IsNullOrEmpty(payload.MesAno) ||
+                    string.IsNullOrEmpty(payload.Pessoa))
+                {
+                    return BadRequest(new { status = "erro", message = "Campos obrigatórios não informados." });
+                }
+
+                var linhas = await _googleSheetsService.ObterValores();
+                if (linhas == null || linhas.Count <= 1)
+                    return NotFound(new { status = "erro", message = "Nenhuma linha encontrada." });
+
+                // Localizar índice da linha que corresponde
+                var index = linhas
+                    .Select((linha, idx) => new { Linha = linha, Index = idx })
+                    .FirstOrDefault(x =>
+                        (x.Linha.ElementAtOrDefault(0)?.ToString() ?? "") == payload.Id &&
+                        (x.Linha.ElementAtOrDefault(2)?.ToString() ?? "") == payload.MesAno &&
+                        (x.Linha.ElementAtOrDefault(3)?.ToString() ?? "") == payload.Pessoa);
+
+                if (index == null)
+                    return NotFound(new { status = "erro", message = "Linha não encontrada." });
+
+                // +1 porque na planilha o índice começa em 1 e pula o cabeçalho
+                await _googleSheetsService.DeletarLinha(index.Index + 1);
+
+                return Ok(new { status = "sucesso", message = "Fixo deletado com sucesso." });
             }
             catch (Exception ex)
             {
