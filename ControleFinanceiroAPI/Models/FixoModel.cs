@@ -6,4 +6,5 @@
     public string Vencimento { get; set; }
     public string Valor { get; set; }
     public string Pago { get; set; }
+    public string Dividido { get; set; }
 }

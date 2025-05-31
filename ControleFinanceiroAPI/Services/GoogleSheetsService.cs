@@ -15,7 +15,7 @@ public class GoogleSheetsService
 
     private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM";
     private readonly string SheetName = "Controle";
-    private readonly string rangeFixo = "Fixos!A:G";
+    private readonly string rangeFixo = "Fixos!A:H";
 
     private readonly SheetsService _service;
 
@@ -691,7 +691,7 @@ public class GoogleSheetsService
                             model.Vencimento,  
                             model.Valor.ToString(),       
                             model.Pago == false ? "Não" : "Sim",        
-                            
+                            model.Dividido
                         }
                     };
 
@@ -707,7 +707,7 @@ public class GoogleSheetsService
 
     public async Task AtualizarLinha(int linhaNumero, IList<object> valores)
     {
-        var range = $"Fixos!A{linhaNumero}:G{linhaNumero}"; // faixa da linha completa, ajuste colunas se quiser
+        var range = $"Fixos!A{linhaNumero}:H{linhaNumero}"; // faixa da linha completa, ajuste colunas se quiser
         var valueRange = new ValueRange
         {
             Values = new List<IList<object>> { valores }
@@ -745,8 +745,8 @@ public class GoogleSheetsService
                         Pessoa = linha.ElementAtOrDefault(3)?.ToString() ?? "",
                         Vencimento = linha.ElementAtOrDefault(4)?.ToString(),
                         Valor = ParseDecimal(linha.ElementAtOrDefault(5)?.ToString()),
-                        Pago = (linha.ElementAtOrDefault(6)?.ToString()?.Trim().ToLower() == "true")
-                        
+                        Pago = (linha.ElementAtOrDefault(6)?.ToString()?.Trim().ToLower() == "true"),
+                        Dividido = linha.ElementAtOrDefault(7)?.ToString()
                     };
 
                     return (true, "Linha encontrada com sucesso.", gasto);
@@ -761,7 +761,7 @@ public class GoogleSheetsService
         }
     }
 
-    public async Task<bool> AtualizarLinhaPorIdAsync(string id, decimal novoValor)
+    public async Task<bool> AtualizarLinhaPorIdAsync(string id, decimal novoValor, string Dividido)
     {
         // Lê todas as linhas da aba
         var linhas = ReadData(rangeFixo);
@@ -782,11 +782,12 @@ public class GoogleSheetsService
                 int numeroDaLinhaNaPlanilha = i + 1; // +1 porque a contagem na planilha começa em 1
 
                 // Garante que a linha tenha pelo menos 7 colunas
-                while (linha.Count < 7)
+                while (linha.Count < 8)
                     linha.Add("");
 
                 // Atualiza o valor na coluna 5 (índice 5, que é a 6ª coluna → "Valor")
                 linha[5] = novoValor.ToString(CultureInfo.InvariantCulture).ToString();
+                linha[7] = Dividido;
 
                 await AtualizarLinha(numeroDaLinhaNaPlanilha, linha);
                 return true;

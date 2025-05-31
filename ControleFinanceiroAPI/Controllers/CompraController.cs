@@ -50,54 +50,6 @@ namespace ControleFinanceiroAPI.Controllers
             return Ok(data);
         }
 
-        [HttpGet("ListarFixos")]
-        public async Task<IActionResult> ListarFixos([FromQuery] string pessoa)
-        {
-            try
-            {
-                // Colunas da aba: Id, Tipo, MesAno, Pessoa, Vencimento, Valor, Pago
-                var dados = await _googleSheetsService.ObterValores();
-
-                if (dados == null || dados.Count == 0)
-                    return Ok(new List<object>());
-
-                var lista = new List<FixoModel>();
-
-                // Pula o cabeçalho, começa do índice 1
-                for (int i = 1; i < dados.Count; i++)
-                {
-                    var linha = dados[i];
-
-                    // Garante que a linha tenha 7 colunas (preenche com null se faltar)
-                    while (linha.Count < 7)
-                        linha.Add(null);
-
-                    // Se a coluna Pessoa (index 3) for diferente da pessoa buscada, pula
-                    if (linha[3]?.ToString()?.Trim().ToUpper() != pessoa.ToUpper()) continue;
-
-                    var fixo = new FixoModel
-                    {
-                        Id = long.TryParse(linha[0]?.ToString(), out var idVal) ? idVal : 0,
-                        Tipo = linha[1]?.ToString(),
-                        MesAno = linha[2]?.ToString(),
-                        Vencimento = linha[4]?.ToString(),
-                        Valor = linha[5]?.ToString()
-                                    ?.Replace("R$", "", StringComparison.OrdinalIgnoreCase)
-                                    ?.Replace(",", "")
-                                    ?.Trim(),
-                        Pago = linha[6]?.ToString()?.Trim()
-                    };
-
-                    lista.Add(fixo);
-                }
-
-                return Ok(lista);
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { status = "erro", message = ex.Message });
-            }
-        }
         [HttpGet("TodasComprasPorPessoa")]
         public IActionResult GetAllComprasPorPessoa()
         {
@@ -271,6 +223,56 @@ namespace ControleFinanceiroAPI.Controllers
         }
 
         #region FIXOS
+        [HttpGet("ListarFixos")]
+        public async Task<IActionResult> ListarFixos([FromQuery] string pessoa)
+        {
+            try
+            {
+                // Colunas da aba: Id, Tipo, MesAno, Pessoa, Vencimento, Valor, Pago
+                var dados = await _googleSheetsService.ObterValores();
+
+                if (dados == null || dados.Count == 0)
+                    return Ok(new List<object>());
+
+                var lista = new List<FixoModel>();
+
+                // Pula o cabeçalho, começa do índice 1
+                for (int i = 1; i < dados.Count; i++)
+                {
+                    var linha = dados[i];
+
+                    // Garante que a linha tenha 7 colunas (preenche com null se faltar)
+                    while (linha.Count < 7)
+                        linha.Add(null);
+
+                    // Se a coluna Pessoa (index 3) for diferente da pessoa buscada, pula
+                    if (linha[3]?.ToString()?.Trim().ToUpper() != pessoa.ToUpper()) continue;
+
+                    var fixo = new FixoModel
+                    {
+                        Id = long.TryParse(linha[0]?.ToString(), out var idVal) ? idVal : 0,
+                        Tipo = linha[1]?.ToString(),
+                        MesAno = linha[2]?.ToString(),
+                        Vencimento = linha[4]?.ToString(),
+                        Valor = linha[5]?.ToString()
+                                    ?.Replace("R$", "", StringComparison.OrdinalIgnoreCase)
+                                    ?.Replace(",", "")
+                                    ?.Trim(),
+                        Pago = linha[6]?.ToString()?.Trim(),
+                        Dividido = linha[7]?.ToString()
+                    };
+
+                    lista.Add(fixo);
+                }
+
+                return Ok(lista);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+
         [HttpPost("GeraFixos")]
         public async Task<IActionResult> GeraFixos([FromBody] FixoPayload payload)
         {
@@ -294,7 +296,8 @@ namespace ControleFinanceiroAPI.Controllers
                                     payload.Pessoa,
                                     fixo.Vencimento,
                                     "",    // 🔸 Valor a preencher depois
-                                    ""     // 🔸 Pago a preencher depois
+                                    ""  ,   // 🔸 Pago a preencher depois
+                                    fixo.Dividido
                                 };
 
                     linhas.Add(linha);
@@ -334,14 +337,15 @@ namespace ControleFinanceiroAPI.Controllers
                 var linha = dados[linhaIndex];
 
                 // Garantir que linha tenha pelo menos 7 colunas
-                while (linha.Count < 7)
+                while (linha.Count < 8)
                 {
                     linha.Add(string.Empty);
                 }
                 // Atualizar valor e pago (colunas 5 e 6)
                 linha[5] = model.Valor.ToString("F2").Replace(",", "."); // valor decimal formatado com ponto
                 linha[6] = model.Pago ? "Sim" : "Não";
-
+                linha[7] = model.Dividido ? "Sim" : "Não";
+                
                 // Atualiza a linha na planilha (assumindo que você tem método para atualizar uma linha específica)
                 await _googleSheetsService.AtualizarLinha(linhaIndex + 1, linha);
                 // +1 porque planilha geralmente indexa linha 1 como cabeçalho
@@ -372,7 +376,7 @@ namespace ControleFinanceiroAPI.Controllers
 
             // 🔻 Atualiza o valor da linha original
             decimal novoValor = valorAtual - request.ValorDividir;
-            await _googleSheetsService.AtualizarLinhaPorIdAsync(request.IdLinha, novoValor);
+            await _googleSheetsService.AtualizarLinhaPorIdAsync(request.IdLinha, novoValor, request.Dividido);
 
             // ➕ Cria a nova linha para quem vai receber o valor dividido
             var novaLinha = new LinhaGastoModel
@@ -383,7 +387,8 @@ namespace ControleFinanceiroAPI.Controllers
                 Vencimento = linha.Vencimento = $"{DateTime.Today.Year}-{DateTime.Today.Month.ToString("D2")}-15",
                 Valor = request.ValorDividir,
                 Pago = linha.Pago,
-                Pessoa = request.NomeDestino
+                Pessoa = request.NomeDestino,
+                Dividido = request.Dividido
             };
 
             await _googleSheetsService.InserirLinhaAsync(novaLinha);

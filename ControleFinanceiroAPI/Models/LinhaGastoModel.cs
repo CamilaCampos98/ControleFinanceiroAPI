@@ -9,5 +9,6 @@
         public string Vencimento { get; set; }
         public decimal Valor { get; set; }
         public bool Pago { get; set; }
+        public string Dividido { get; set; }
     }
 }
