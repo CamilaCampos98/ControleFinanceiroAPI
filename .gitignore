@@ -11,7 +11,8 @@
 *.sln.docstates
 
 # Google API credentials
-wwwroot/credentials.json
+ControleFinanceiroAPI/wwwroot/
+
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
