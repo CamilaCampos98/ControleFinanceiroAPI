@@ -21,18 +21,7 @@ public class GoogleSheetsService
 
     public GoogleSheetsService()
     {
-        var jsonFilePath = GetJsonFilePath();
-        if (!File.Exists(jsonFilePath))
-        {
-            throw new FileNotFoundException($"Arquivo de credenciais não encontrado em: {jsonFilePath}");
-        }
-
-        GoogleCredential credential;
-        using (var stream = new FileStream(jsonFilePath, FileMode.Open, FileAccess.Read))
-        {
-            credential = GoogleCredential.FromStream(stream)
-                                         .CreateScoped(Scopes);
-        }
+        var credential = GetGoogleCredential().CreateScoped(Scopes);
 
         _service = new SheetsService(new BaseClientService.Initializer
         {
@@ -41,31 +30,33 @@ public class GoogleSheetsService
         });
     }
 
-    private static string GetJsonFilePath()
+    private static GoogleCredential GetGoogleCredential()
     {
-        var pathFromEnv = Environment.GetEnvironmentVariable("GOOGLE_SHEETS_JSON_PATH");
+        // Primeiro tenta pegar das variáveis de ambiente (Render ou outro servidor)
+        var credentialsJson = Environment.GetEnvironmentVariable("GOOGLE_CREDENTIALS");
 
-        if (!string.IsNullOrEmpty(pathFromEnv) && File.Exists(pathFromEnv))
+        if (!string.IsNullOrEmpty(credentialsJson))
         {
-            return pathFromEnv;
+            return GoogleCredential.FromJson(credentialsJson);
         }
 
-        // Tenta na raiz
-        var localPath = Path.Combine(Directory.GetCurrentDirectory(), "credentials.json");
-        if (File.Exists(localPath))
+        // Caso não encontre na variável, tenta os arquivos locais
+        var possiblePaths = new[]
         {
-            return localPath;
+        Environment.GetEnvironmentVariable("GOOGLE_SHEETS_JSON_PATH"), // caminho manual via env
+        Path.Combine(Directory.GetCurrentDirectory(), "credentials.json"),
+        Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "credentials.json")
+        };
+
+        foreach (var path in possiblePaths)
+        {
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                return GoogleCredential.FromFile(path);
+            }
         }
 
-        // Tenta na pasta wwwroot
-        var wwwrootPath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "credentials.json");
-        if (File.Exists(wwwrootPath))
-        {
-            return wwwrootPath;
-        }
-
-        // Se não encontrar, retorna o primeiro caminho para lançar erro depois
-        return pathFromEnv ?? localPath;
+        throw new FileNotFoundException("Credenciais do Google não encontradas. Configure a variável de ambiente 'GOOGLE_SHEETS_CREDENTIALS_JSON' ou coloque o arquivo 'credentials.json' na raiz ou em wwwroot.");
     }
 
     public IList<IList<object>> ReadData(string range)
