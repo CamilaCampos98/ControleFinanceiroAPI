@@ -670,7 +670,11 @@ public class GoogleSheetsService
     /// </summary>
     public string ObterMesAnoCompetencia(DateTime data)
     {
-        return $"{data.Month:D2}/{data.Year}";
+        // Se o dia da data for menor que 8, volta para o mês anterior
+        var mes = data.Day >= 8 ? data.Month : data.AddMonths(-1).Month;
+        var ano = data.Day >= 8 ? data.Year : data.AddMonths(-1).Year;
+
+        return $"{mes:D2}/{ano}";
     }
 
     // Busca entrada pelo nome da pessoa e mês
