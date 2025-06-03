@@ -112,7 +112,7 @@ namespace ControleFinanceiroAPI.Controllers
                             };
 
                 // Verifica se a pessoa tem entrada no mês
-                var temEntrada = _googleSheetsService.PessoaTemEntradaCadastrada(compra.Pessoa, compra.Data.ToString("MM/yyyy") ?? "");
+                var temEntrada = _googleSheetsService.PessoaTemEntradaCadastrada(compra.Pessoa, compra.Data);
 
                 if (!temEntrada)
                 {
@@ -222,6 +222,16 @@ namespace ControleFinanceiroAPI.Controllers
 
         }
 
+        [HttpPut("EditarCompra")]
+        public IActionResult Editar([FromBody] EditarCompraRequest request)
+        {
+            var sucesso = _googleSheetsService.EditarCompraNaPlanilha(request.IdLan, request);
+
+            if (!sucesso)
+                return NotFound("Compra não encontrada.");
+
+            return Ok("Compra atualizada com sucesso.");
+        }
         #region FIXOS
         [HttpGet("ListarFixos")]
         public async Task<IActionResult> ListarFixos([FromQuery] string pessoa)

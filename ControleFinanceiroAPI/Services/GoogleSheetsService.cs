@@ -100,16 +100,17 @@ public class GoogleSheetsService
             var parcelaStr = compra.TotalParcelas > 1 ? $"{i}/{compra.TotalParcelas}" : "";
 
             linhas.Add(new List<object> {
-            compra.idLan,
-            compra.FormaPgto,
-            parcelaStr,
-            compra.Descricao,
-            valorParcela,
-            dataParcela.ToString("MM/yyyy"),
-            dataParcela.ToString("yyyy-MM-dd"),
-            compra.Pessoa,
-            compra.Fonte
-        });
+                        compra.idLan,
+                        compra.FormaPgto,
+                        parcelaStr,
+                        compra.Descricao,
+                        valorParcela,
+                        dataParcela.ToString("MM/yyyy"),
+                        dataParcela.ToString("yyyy-MM-dd"),
+                        compra.Pessoa,
+                        compra.Fonte,
+                        compra.Cartao
+                    });
         }
 
         var valueRange = new ValueRange { Values = linhas };
@@ -175,20 +176,18 @@ public class GoogleSheetsService
             decimal salario = 0m;
             decimal extras = 0m;
 
-            foreach (var linha in config.Skip(1)) // Ignora o header
+            var competencia = ObterMesAnoCompetencia(inicio);
+
+            foreach (var linha in config.Skip(1))
             {
                 var pessoaConfig = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "";
                 var mesAno = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
 
                 if (string.Equals(pessoaConfig, pessoa, StringComparison.OrdinalIgnoreCase) &&
-                    (mesAno == $"{inicio:MM/yyyy}" || mesAno == $"{fim:MM/yyyy}"))
+                    string.Equals(mesAno, competencia, StringComparison.OrdinalIgnoreCase))
                 {
-                    var salarioStr = linha.ElementAtOrDefault(2)?.ToString();
-                    salario = ParseDecimal(salarioStr);
-
-                    var extrasStr = linha.ElementAtOrDefault(5)?.ToString(); // Coluna Extras, ajuste se precisar
-                    extras = ParseDecimal(extrasStr);
-
+                    salario = ParseDecimal(linha.ElementAtOrDefault(2)?.ToString());
+                    extras = ParseDecimal(linha.ElementAtOrDefault(5)?.ToString());
                     break;
                 }
             }
@@ -200,7 +199,6 @@ public class GoogleSheetsService
 
             decimal totalRecebido = salario + extras;
 
-            // Filtrar as compras
             var comprasFiltradas = new List<Dictionary<string, object>>();
             var resumoPorCartao = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
             var resumoPorCartaoTipo = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
@@ -218,12 +216,17 @@ public class GoogleSheetsService
                 if (!DateTime.TryParse(dataStr, out DateTime dataCompra))
                     continue;
 
+                if (string.IsNullOrEmpty(cartao))
+                    continue;
+
+                string cartaoBase = RemoverPalavras(cartao);
+
+                // Verifica se a compra está dentro do filtro da tela
                 if (dataCompra >= inicio && dataCompra <= fim)
                 {
-                    var valorStr = linha.ElementAtOrDefault(4)?.ToString();
-                    var valor = ParseDecimal(valorStr);
+                    var valor = ParseDecimal(linha.ElementAtOrDefault(4)?.ToString());
 
-                    // ----------- Preenche comprasFiltradas (filtrando por pessoa) ------------
+                    // Verifica se a compra é da pessoa
                     if (string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
                     {
                         totalGasto += valor;
@@ -235,21 +238,19 @@ public class GoogleSheetsService
                             var valorCelula = linha.ElementAtOrDefault(j) ?? "";
                             compra[chave] = valorCelula;
                         }
-
                         comprasFiltradas.Add(compra);
                     }
 
-                    // ----------- Agrupa por cartão base (sem titular/adicional) ------------
-                    if (!string.IsNullOrEmpty(cartao))
-                    {
-                        string cartaoBase = RemoverPalavras(cartao); // Remove "Titular"/"Adicional"
+                    // ----------- Agrupamento por cartão considerando o ciclo específico -----------
+                    var (inicioCorte, fimCorte) = ObterPeriodoCortePorCartao(dataCompra, cartaoBase);
 
-                        // Se for cartão Bradesco, só soma se a pessoa for igual à do filtro
+                    if (dataCompra >= inicioCorte && dataCompra <= fimCorte)
+                    {
+                        // Se for cartão Bradesco, soma apenas se for da pessoa
                         if (cartaoBase.Equals("Bradesco", StringComparison.OrdinalIgnoreCase))
                         {
                             if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
                             {
-                                // Ignora essa compra para Bradesco se a pessoa for diferente
                                 continue;
                             }
                         }
@@ -260,11 +261,10 @@ public class GoogleSheetsService
                         else
                             resumoPorCartao[cartaoBase] = valor;
 
-                        // ----------- Agrupa também por tipo (Titular ou Adicional) ------------
+                        // Agrupa por tipo (Titular ou Adicional)
                         string tipo = cartao.Contains("Adicional", StringComparison.OrdinalIgnoreCase) ? "Adicional" :
                                       cartao.Contains("Titular", StringComparison.OrdinalIgnoreCase) ? "Titular" : "Outro";
 
-                        // Cria chave no formato CartaoBase|Tipo
                         string chave = $"{cartaoBase}|{tipo}";
 
                         if (resumoPorCartaoTipo.ContainsKey(chave))
@@ -276,8 +276,9 @@ public class GoogleSheetsService
             }
 
             decimal totalGastoFixos = 0;
-            // --- Novo: Ler dados da aba Fixos e somar os valores da coluna 5 para a mesma pessoa e período ---
-            var linhasFixos = ReadData(rangeFixo); 
+
+            // Ler dados da aba Fixos
+            var linhasFixos = ReadData(rangeFixo);
 
             if (linhasFixos != null && linhasFixos.Count > 1)
             {
@@ -285,28 +286,20 @@ public class GoogleSheetsService
                 {
                     var linhaFixo = linhasFixos[i];
 
-                    var pessoaFixo = linhaFixo.ElementAtOrDefault(3)?.ToString()?.Trim() ?? ""; 
-                    var mesAnoFixo = linhaFixo.ElementAtOrDefault(2)?.ToString()?.Trim() ?? ""; 
+                    var pessoaFixo = linhaFixo.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
+                    var mesAnoFixo = linhaFixo.ElementAtOrDefault(2)?.ToString()?.Trim() ?? "";
 
                     if (!string.Equals(pessoaFixo, pessoa, StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    // Verifica se o MesAno da linha fixa está dentro do período
-                    // Como MesAno é MM/yyyy, vamos comparar com inicio e fim:
-                    if (DateTime.TryParseExact(mesAnoFixo, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoData))
+                    if (mesAnoFixo == competencia)
                     {
-                        // Só soma se o MesAno estiver dentro do período (mes e ano)
-                        if (mesAnoData >= new DateTime(inicio.Year, inicio.Month, 1) && mesAnoData <= new DateTime(fim.Year, fim.Month, 1))
-                        {
-                            var valorFixoStr = linhaFixo.ElementAtOrDefault(5)?.ToString(); // Coluna Valor índice 5
-                            var valorFixo = ParseDecimal(valorFixoStr);
-                            totalGasto += valorFixo;
-                            totalGastoFixos += valorFixo;
-                        }
+                        var valorFixo = ParseDecimal(linhaFixo.ElementAtOrDefault(5)?.ToString());
+                        totalGasto += valorFixo;
+                        totalGastoFixos += valorFixo;
                     }
                 }
             }
-            // --- Fim do novo ---
 
             var listaCartaoTipo = resumoPorCartaoTipo.Select(item =>
             {
@@ -318,7 +311,6 @@ public class GoogleSheetsService
                     Valor = item.Value
                 };
             }).OrderBy(x => x.Cartao).ToList();
-
 
             var saldoRestante = totalRecebido - totalGasto;
 
@@ -345,6 +337,7 @@ public class GoogleSheetsService
         }
     }
 
+   
     public (bool Success, string Message, List<ResumoPessoaDTO>? Data) ResumoGeral()
     {
         try
@@ -478,6 +471,74 @@ public class GoogleSheetsService
         }
     }
 
+    public int? ObterIndiceDaLinhaPorId(string idLan)
+    {
+        var linhas = ReadData($"{SheetName}!A:J"); // Ajuste o range conforme sua planilha
+
+        if (linhas == null || linhas.Count <= 1)
+            return null;
+
+        var header = linhas[0];
+        int indexIdLan = header
+            .Select((valor, index) => new { valor, index })
+            .FirstOrDefault(x => (x.valor?.ToString()?.Trim() ?? "").Equals("IdLan", StringComparison.OrdinalIgnoreCase))
+            ?.index ?? -1;
+
+        if (indexIdLan == -1)
+            return null; // Coluna IdLan não encontrada
+
+        for (int i = 1; i < linhas.Count; i++)
+        {
+            var linha = linhas[i];
+            var idValor = linha.ElementAtOrDefault(indexIdLan)?.ToString()?.Trim();
+
+            if (idValor == idLan)
+            {
+                return i + 1; // Soma 1 porque o índice na planilha começa em 1 (linha real)
+            }
+        }
+
+        return null;
+    }
+    public bool EditarCompraNaPlanilha(string idLan, EditarCompraRequest request)
+    {
+        var indiceLinha = ObterIndiceDaLinhaPorId(idLan);
+
+        if (indiceLinha == null)
+            return false;
+
+        var dadosAtualizados = new List<object?>
+                                {
+                                    request.IdLan,
+                                    request.FormaPgto,
+                                    request.Parcela,
+                                    request.Compra,
+                                    request.Valor,
+                                    request.MesAno,
+                                    request.Data?.ToString("dd/MM/yyyy"), 
+                                    request.Pessoa,
+                                    request.Fonte == "" ? "Salario" : request.Fonte,
+                                    request.Cartao
+                                  
+                                };
+
+        var range = $"{SheetName}!A{indiceLinha}:J{indiceLinha}";
+
+        AtualizaCompra(range, new List<IList<object?>> { dadosAtualizados });
+
+        return true;
+    }
+
+    public void AtualizaCompra(string range, IList<IList<object>> values)
+    {
+        var request = _service.Spreadsheets.Values.Update(
+            new Google.Apis.Sheets.v4.Data.ValueRange() { Values = values },
+            SpreadsheetId,
+            range);
+
+        request.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.USERENTERED;
+        request.Execute();
+    }
 
     public static string RemoverPalavras(string texto)
     {
@@ -564,7 +625,7 @@ public class GoogleSheetsService
         return 0;
     }
 
-   
+
     public void WriteEntrada(List<object> entrada)
     {
         var valueRange = new ValueRange { Values = new List<IList<object>> { entrada } };
@@ -576,8 +637,11 @@ public class GoogleSheetsService
         appendRequest.Execute();
     }
 
-    public bool PessoaTemEntradaCadastrada(string pessoa, string mesAno)
+    public bool PessoaTemEntradaCadastrada(string pessoa, DateTime dataCompra)
     {
+        // Obter o mesAno baseado na dataCompra e na regra do dia 08
+        var mesAno = ObterMesAnoCompetencia(dataCompra);
+
         var range = "Config!A:D"; // A = Pessoa, D = MesAno
         var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
         var response = request.Execute();
@@ -599,6 +663,14 @@ public class GoogleSheetsService
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Calcula o mes/ano da competência financeira, onde o mês vira no dia 08.
+    /// </summary>
+    public string ObterMesAnoCompetencia(DateTime data)
+    {
+        return $"{data.Month:D2}/{data.Year}";
     }
 
     // Busca entrada pelo nome da pessoa e mês
@@ -664,6 +736,45 @@ public class GoogleSheetsService
         updateRequest.Execute();
     }
 
+    public (DateTime inicio, DateTime fim) ObterPeriodoCortePorCartao(DateTime dataReferencia, string cartao)
+    {
+        int diaInicio = 8;
+        int diaFim = 7;
+
+        switch (cartao.Trim().ToUpperInvariant())
+        {
+            case "ITAÚ":
+            case "ITAU":
+                diaInicio = 8;
+                diaFim = 7;
+                break;
+            case "BRADESCO":
+                diaInicio = 5;
+                diaFim = 4;
+                break;
+            case "SANTANDER":
+                diaInicio = 11;
+                diaFim = 10;
+                break;
+            default:
+                diaInicio = 8;
+                diaFim = 7;
+                break;
+        }
+
+        // Define o mês base para o início da competência
+        DateTime dataBase = dataReferencia.Day >= diaInicio
+            ? new DateTime(dataReferencia.Year, dataReferencia.Month, diaInicio)
+            : new DateTime(dataReferencia.AddMonths(-1).Year, dataReferencia.AddMonths(-1).Month, diaInicio);
+
+        // fim é diaFim do mês seguinte ao mês base
+        DateTime fim = new DateTime(dataBase.Year, dataBase.Month, 1).AddMonths(1); // primeiro dia do próximo mês
+        fim = new DateTime(fim.Year, fim.Month, diaFim);
+
+        return (dataBase, fim);
+    }
+
+
     #region FIXOS
 
     public async Task DeletarLinha(int rowIndex)
@@ -689,13 +800,13 @@ public class GoogleSheetsService
                     {
                         new List<object>
                         {
-                            model.Id,       
-                            model.Tipo,   
+                            model.Id,
+                            model.Tipo,
                             model.MesAno,
                             model.Pessoa,
-                            model.Vencimento,  
-                            model.Valor.ToString(),       
-                            model.Pago == false ? "Não" : "Sim",        
+                            model.Vencimento,
+                            model.Valor.ToString(),
+                            model.Pago == false ? "Não" : "Sim",
                             model.Dividido
                         }
                     };
