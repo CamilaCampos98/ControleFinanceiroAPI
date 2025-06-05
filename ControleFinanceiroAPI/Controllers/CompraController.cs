@@ -34,15 +34,15 @@ namespace ControleFinanceiroAPI.Controllers
         }
 
         [HttpGet("ResumoPessoaPeriodo")]
-        public IActionResult GetResumoPorPessoaEPeriodo(string pessoa, string dataInicio, string dataFim)
+        public IActionResult GetResumoPorPessoaEPeriodo(string pessoa, string mesAno)
         {
-            if (!DateTime.TryParse(dataInicio, out DateTime inicio))
-                return BadRequest("Data de início inválida.");
+            if (string.IsNullOrEmpty(pessoa))
+                return BadRequest("Pessoa é obrigatória.");
 
-            if (!DateTime.TryParse(dataFim, out DateTime fim))
-                return BadRequest("Data de fim inválida.");
+            if (!DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoDate))
+                return BadRequest("mesAno inválido. Formato esperado: MM/yyyy (ex: 05/2025).");
 
-            var (success, message, data) = _googleSheetsService.GetResumoPorPessoaEPeriodo(pessoa, inicio, fim);
+            var (success, message, data) = _googleSheetsService.GetResumoPorPessoaEPeriodo(pessoa, mesAno);
 
             if (!success)
                 return BadRequest(message);
@@ -299,11 +299,11 @@ namespace ControleFinanceiroAPI.Controllers
 
                 var linhasParaInserir = new List<IList<object>>();
                 var fixosInseridos = new List<object>();
-                var fixosIgnorados = new List<object>();
 
                 foreach (var fixo in payload.Data)
                 {
-                    bool jaExiste = linhasAtuais.Skip(1).Any(l =>
+                    // Verifica se já existe
+                    var linhaExistente = linhasAtuais.Skip(1).FirstOrDefault(l =>
                     {
                         var tipo = l.ElementAtOrDefault(1)?.ToString()?.Trim();
                         var mesAno = l.ElementAtOrDefault(2)?.ToString()?.Trim();
@@ -314,33 +314,36 @@ namespace ControleFinanceiroAPI.Controllers
                                string.Equals(pessoa, payload.Pessoa, StringComparison.OrdinalIgnoreCase);
                     });
 
-                    var resumo = new
-                    {
-                        fixo.Tipo,
-                        fixo.MesAno,
-                        Pessoa = payload.Pessoa
-                    };
+                    string novoMesAno = fixo.MesAno;
 
-                    if (jaExiste)
+                    if (linhaExistente != null)
                     {
-                        fixosIgnorados.Add(resumo);
-                        continue; // 🔸 Pula se já existe
+                        // 🔥 Se já existe, soma +1 mês no MesAno
+                        if (DateTime.TryParseExact(fixo.MesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dataMesAno))
+                        {
+                            var proximoMes = dataMesAno.AddMonths(1);
+                            novoMesAno = $"{proximoMes:MM/yyyy}";
+                        }
+                        else
+                        {
+                            return BadRequest(new { status = "erro", message = $"Mês/Ano inválido: {fixo.MesAno}" });
+                        }
                     }
 
                     var linha = new List<object>
-                        {
-                            fixo.Id,
-                            fixo.Tipo,
-                            fixo.MesAno,
-                            payload.Pessoa,
-                            fixo.Vencimento,
-                            "",    // 🔸 Valor (a preencher depois)
-                            "",    // 🔸 Pago (a preencher depois)
-                            fixo.Dividido
-                        };
+                                {
+                                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + new Random().Next(1000,9999), // 🔗 Novo Id
+                                    fixo.Tipo,
+                                    novoMesAno,
+                                    payload.Pessoa,
+                                    fixo.Vencimento,
+                                    "",    // 🔸 Valor
+                                    "",    // 🔸 Pago
+                                    fixo.Dividido
+                                };
 
                     linhasParaInserir.Add(linha);
-                    fixosInseridos.Add(resumo);
+                    fixosInseridos.Add(new { fixo.Tipo, MesAno = novoMesAno, Pessoa = payload.Pessoa });
                 }
 
                 if (linhasParaInserir.Any())
@@ -352,8 +355,7 @@ namespace ControleFinanceiroAPI.Controllers
                 {
                     status = "sucesso",
                     message = linhasParaInserir.Any() ? "Processo concluído com sucesso." : "Nenhum fixo novo para inserir.",
-                    inseridos = fixosInseridos,
-                    ignorados = fixosIgnorados
+                    inseridos = fixosInseridos
                 });
             }
             catch (Exception ex)
@@ -361,6 +363,7 @@ namespace ControleFinanceiroAPI.Controllers
                 return StatusCode(500, new { status = "erro", message = ex.Message });
             }
         }
+
 
         [HttpPost("DeletarFixo")]
         public async Task<IActionResult> DeletarFixo([FromBody] DeletarFixoPayload payload)

@@ -337,7 +337,7 @@ public class GoogleSheetsService
         }
     }
 
-   
+
     public (bool Success, string Message, List<ResumoPessoaDTO>? Data) ResumoGeral()
     {
         try
@@ -471,6 +471,176 @@ public class GoogleSheetsService
         }
     }
 
+
+
+    public (bool success, string message, object data) GetResumoPorPessoaEPeriodo(string pessoa, string mesAno)
+    {
+        try
+        {
+
+            // Ler dados das planilhas
+            var configData = ReadData("Config!A1:F");
+            var fixosData = ReadData("Fixos!A1:H");
+            var controleData = ReadData("Controle!A1:J");
+
+            // Mapear Config
+            var configs = configData.Skip(1).Select(row => new
+            {
+                Pessoa = row[0].ToString(),
+                Fonte = row[1].ToString(),
+                Valor = ParseDecimal((row[2].ToString())),
+                mesAno = row[3].ToString(),
+                ValorHora = decimal.Parse(row[4].ToString()),
+                Extras = decimal.Parse(row[5].ToString())
+            }).ToList();
+
+            // Mapear Fixos
+            var fixos = fixosData.Skip(1).Select(row => new
+            {
+                Id = row[0].ToString(),
+                Tipo = row[1].ToString(),
+                mesAno = row[2].ToString(),
+                Pessoa = row[3].ToString(),
+                Vencimento = row[4].ToString(),
+                Valor = ParseDecimal(row[5].ToString()),
+                Pago = row[6].ToString(),
+                Dividido = row[7].ToString()
+            }).ToList();
+
+            // Mapear Controle
+            var controle = controleData.Skip(1).Select(row => new
+            {
+                IdLan = row[0].ToString(),
+                FormaPgto = row[1].ToString(),
+                Parcela = row[2].ToString(),
+                Compra = row[3].ToString(),
+                Valor = ParseDecimal(row[4].ToString()),
+                mesAno = row[5].ToString(),
+                Data = DateTime.Parse(row[6].ToString()),
+                Pessoa = row[7].ToString(),
+                Fonte = row[8].ToString(),
+                Cartao = row[9].ToString()
+            }).ToList();
+
+            // Filtrar Config para pessoa e mesAno
+            var dadosConfig = configs
+                .Where(c => c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && c.mesAno == mesAno)
+                .ToList();
+
+            if (!dadosConfig.Any())
+                return (false, $"Não há dados para {pessoa} no período {mesAno}.", null);
+
+            var salario = dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase))
+                                    .Sum(c => c.Valor);
+
+            var extra = dadosConfig.Sum(c => c.Extras);
+
+            // Filtrar fixos para pessoa e mesAno (mesAno convertido para string)
+            var fixosPessoa = fixos
+                .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && f.mesAno == mesAno.ToString())
+                .Sum(f => f.Valor);
+
+            // Filtrar controle (gastos) para pessoa e mesAno
+            var controlePessoa = controle
+                .Where(c => c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && c.mesAno == mesAno.ToString())
+                .ToList();
+
+            // Agrupar gastos por cartão
+            var gastosPorCartao = controlePessoa
+                .GroupBy(c => string.IsNullOrEmpty(c.Cartao) ? "Outros" : c.Cartao)
+                .Select(g => new
+                {
+                    Cartao = g.Key,
+                    Valor = g.Sum(x => x.Valor)
+                }).ToList();
+
+            var totalGastoControle = controlePessoa.Sum(c => c.Valor);
+
+            var saldoFinal = (salario + extra) - fixosPessoa - totalGastoControle;
+
+
+            var gastosPorCartaoDict = controlePessoa
+                                    .GroupBy(c => string.IsNullOrEmpty(c.Cartao) ? "Outros" : c.Cartao)
+                                    .ToDictionary(g => g.Key, g => g.Sum(x => x.Valor));
+
+
+            var resumoPorCartaoTipo = controle
+                                     .Where(c =>
+                                     {
+                                         var cartaoBase = RemoverPalavras(c.Cartao ?? "");
+
+                                         // Se for Bradesco, só considera se a pessoa for igual à informada
+                                         if (cartaoBase.Equals("Bradesco", StringComparison.OrdinalIgnoreCase))
+                                         {
+                                             return c.mesAno == mesAno &&
+                                                    c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
+                                                    !string.IsNullOrEmpty(c.Cartao);
+                                         }
+
+                                         // Caso contrário, considera todas as pessoas
+                                         return c.mesAno == mesAno && !string.IsNullOrEmpty(c.Cartao);
+                                     })
+                                     .GroupBy(c =>
+                                     {
+                                         var cartaoBase = RemoverPalavras(c.Cartao);
+
+                                         var tipo = c.Cartao.Contains("Adicional", StringComparison.OrdinalIgnoreCase)
+                                             ? "Adicional"
+                                             : c.Cartao.Contains("Titular", StringComparison.OrdinalIgnoreCase)
+                                                 ? "Titular"
+                                                 : "Outro";
+
+                                         return new { Cartao = cartaoBase, Tipo = tipo };
+                                     })
+                                     .Select(g => new CartaoTipoResumo
+                                     {
+                                         Cartao = g.Key.Cartao,
+                                         Tipo = g.Key.Tipo,
+                                         Valor = g.Sum(x => x.Valor)
+                                     })
+                                     .ToList();
+
+            // Montar objeto retorno
+            var resultado = new
+            {
+                Pessoa = pessoa,
+                Periodo = mesAno,
+                Salario = salario,
+                Extras = extra,
+                GastosFixos = fixosPessoa,
+                TotalGasto = controlePessoa.Sum(c => c.Valor),
+                SaldoRestante = (salario + extra) - fixosPessoa - controlePessoa.Sum(c => c.Valor),
+                // SaldoCritico será calculado no front, pode deixar false aqui
+                SaldoCritico = false,
+                Compras = controlePessoa.Select(c => new Dictionary<string, object>
+                {
+                    ["IdLan"] = c.IdLan,
+                    ["FormaPgto"] = c.FormaPgto,
+                    ["Parcela"] = c.Parcela,
+                    ["Compra"] = c.Compra,
+                    ["Valor"] = c.Valor,
+                    ["MesAno"] = c.mesAno,
+                    ["Data"] = c.Data,
+                    ["Pessoa"] = c.Pessoa,
+                    ["Fonte"] = c.Fonte,
+                    ["Cartao"] = c.Cartao
+                }).ToList(),
+                ResumoPorCartao = gastosPorCartaoDict,
+                ResumoPorCartaoTipo = resumoPorCartaoTipo
+            };
+
+            return (true, "Sucesso", resultado);
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message, null);
+        }
+    }
+
+
+
+
+
     public int? ObterIndiceDaLinhaPorId(string idLan)
     {
         var linhas = ReadData($"{SheetName}!A:J"); // Ajuste o range conforme sua planilha
@@ -515,11 +685,11 @@ public class GoogleSheetsService
                                     request.Compra,
                                     request.Valor,
                                     request.MesAno,
-                                    request.Data?.ToString("dd/MM/yyyy"), 
+                                    request.Data?.ToString("dd/MM/yyyy"),
                                     request.Pessoa,
                                     request.Fonte == "" ? "Salario" : request.Fonte,
                                     request.Cartao
-                                  
+
                                 };
 
         var range = $"{SheetName}!A{indiceLinha}:J{indiceLinha}";
@@ -671,8 +841,8 @@ public class GoogleSheetsService
     public string ObterMesAnoCompetencia(DateTime data)
     {
         // Se o dia da data for menor que 8, volta para o mês anterior
-        var mes = data.Day >= 8 ? data.Month : data.AddMonths(-1).Month;
-        var ano = data.Day >= 8 ? data.Year : data.AddMonths(-1).Year;
+        var mes = data.Day >= 4 || data.Day >= 8 ? data.Month : data.AddMonths(-1).Month;
+        var ano = data.Day >= 4 || data.Day >= 8 ? data.Year : data.AddMonths(-1).Year;
 
         return $"{mes:D2}/{ano}";
     }
