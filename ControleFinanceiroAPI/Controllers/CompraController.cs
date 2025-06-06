@@ -332,7 +332,7 @@ namespace ControleFinanceiroAPI.Controllers
 
                     var linha = new List<object>
                                 {
-                                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + new Random().Next(1000,9999), // 🔗 Novo Id
+                                    fixo.Id, // 🔗 Novo Id
                                     fixo.Tipo,
                                     novoMesAno,
                                     payload.Pessoa,
