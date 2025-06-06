@@ -1,3 +1,5 @@
+using System.Globalization;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration
@@ -28,6 +30,10 @@ builder.Services.AddCors(options =>
 
 
 var app = builder.Build();
+
+var defaultCulture = new CultureInfo("pt-BR");
+CultureInfo.DefaultThreadCurrentCulture = defaultCulture;
+CultureInfo.DefaultThreadCurrentUICulture = defaultCulture;
 
 app.UseCors("AllowAll");
 
