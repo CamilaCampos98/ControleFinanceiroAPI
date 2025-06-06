@@ -735,61 +735,56 @@ public class GoogleSheetsService
             return 0;
 
         input = input.Replace("R$", "").Trim();
-
-        // Remove espaços
         input = input.Replace(" ", "");
 
-        // Conta quantas vírgulas e pontos existem
         int commaCount = input.Count(c => c == ',');
         int dotCount = input.Count(c => c == '.');
 
-        // Cenário 1: ambos existem
+        // Cenário 1: vírgula e ponto
         if (commaCount > 0 && dotCount > 0)
         {
-            // Assume que o separador decimal é o último deles
-            if (input.LastIndexOf(",") > input.LastIndexOf("."))
+            if (input.LastIndexOf(',') > input.LastIndexOf('.'))
             {
-                // Vírgula é decimal → ponto é milhar
+                // vírgula como decimal → remove ponto (milhar), troca vírgula por ponto
                 input = input.Replace(".", "");
                 input = input.Replace(",", ".");
             }
             else
             {
-                // Ponto é decimal → vírgula é milhar
+                // ponto como decimal → remove vírgula (milhar)
                 input = input.Replace(",", "");
             }
         }
         // Cenário 2: só vírgula
         else if (commaCount > 0)
         {
-            if (input.LastIndexOf(",") >= input.Length - 3)
+            // Se vírgula estiver nos últimos 2 ou 3 caracteres, assume que é decimal
+            if (input.Length - input.LastIndexOf(',') <= 3)
             {
-                // vírgula é decimal
-                input = input.Replace(".", "");
-                input = input.Replace(",", ".");
+                input = input.Replace(".", ""); // remove milhar
+                input = input.Replace(",", "."); // converte decimal para padrão en-US
             }
             else
             {
-                // vírgula é milhar (raro, mas possível)
-                input = input.Replace(",", "");
+                input = input.Replace(",", ""); // vírgula como milhar
             }
         }
         // Cenário 3: só ponto
         else if (dotCount > 0)
         {
-            if (input.LastIndexOf(".") >= input.Length - 3)
+            // Se ponto estiver nos últimos 2 ou 3 caracteres, assume que é decimal
+            if (input.Length - input.LastIndexOf('.') <= 3)
             {
-                // ponto é decimal
-                input = input.Replace(",", "");
+                input = input.Replace(",", ""); // remove qualquer vírgula acidental
             }
             else
             {
-                // ponto é milhar
-                input = input.Replace(".", "");
+                input = input.Replace(".", ""); // ponto como milhar
             }
         }
 
-        if (decimal.TryParse(input, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal result))
+        // Parsing seguro com CultureInfo.InvariantCulture
+        if (decimal.TryParse(input, NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var result))
             return result;
 
         return 0;
