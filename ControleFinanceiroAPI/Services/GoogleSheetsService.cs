@@ -737,59 +737,23 @@ public class GoogleSheetsService
         input = input.Replace("R$", "").Trim();
         input = input.Replace(" ", "");
 
-        int commaCount = input.Count(c => c == ',');
-        int dotCount = input.Count(c => c == '.');
-
-        // Cenário 1: vírgula e ponto
-        if (commaCount > 0 && dotCount > 0)
+        // Trata o caso comum: número no formato BR (ex: "1.380,00")
+        if (input.Contains(","))
         {
-            if (input.LastIndexOf(',') > input.LastIndexOf('.'))
-            {
-                // vírgula como decimal → remove ponto (milhar), troca vírgula por ponto
-                input = input.Replace(".", "");
-                input = input.Replace(",", ".");
-            }
-            else
-            {
-                // ponto como decimal → remove vírgula (milhar)
-                input = input.Replace(",", "");
-            }
+            // Remove separador de milhar (.) e troca vírgula decimal por ponto
+            input = input.Replace(".", "").Replace(",", ".");
         }
-        // Cenário 2: só vírgula
-        else if (commaCount > 0)
+        else
         {
-            // Se vírgula estiver nos últimos 2 ou 3 caracteres, assume que é decimal
-            if (input.Length - input.LastIndexOf(',') <= 3)
-            {
-                input = input.Replace(".", ""); // remove milhar
-                input = input.Replace(",", "."); // converte decimal para padrão en-US
-            }
-            else
-            {
-                input = input.Replace(",", ""); // vírgula como milhar
-            }
-        }
-        // Cenário 3: só ponto
-        else if (dotCount > 0)
-        {
-            // Se ponto estiver nos últimos 2 ou 3 caracteres, assume que é decimal
-            if (input.Length - input.LastIndexOf('.') <= 3)
-            {
-                input = input.Replace(",", ""); // remove qualquer vírgula acidental
-            }
-            else
-            {
-                input = input.Replace(".", ""); // ponto como milhar
-            }
+            // Remove separador de milhar (,) se houver
+            input = input.Replace(",", "");
         }
 
-        // Parsing seguro com CultureInfo.InvariantCulture
-        if (decimal.TryParse(input, NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var result))
-            return result;
+        if (decimal.TryParse(input, NumberStyles.Any, CultureInfo.InvariantCulture, out var valor))
+            return valor;
 
         return 0;
     }
-
 
     public void WriteEntrada(List<object> entrada)
     {
