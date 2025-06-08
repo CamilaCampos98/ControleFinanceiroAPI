@@ -193,7 +193,7 @@ namespace ControleFinanceiroAPI.Controllers
                     if (!decimal.TryParse(valorExtraString, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal extrasAtuais))
                         return BadRequest("Valor da extra inválido na base.");
 
-                    decimal novosExtras = extrasAtuais + valorExtraCalculado;
+                    decimal novosExtras = valorExtraCalculado;
 
                     // Atualizar a coluna Extras na planilha
                     _googleSheetsService.AtualizarExtrasEntrada(entrada.Pessoa, entrada.MesAno, novosExtras);
