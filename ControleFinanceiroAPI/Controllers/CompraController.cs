@@ -50,6 +50,27 @@ namespace ControleFinanceiroAPI.Controllers
             return Ok(data);
         }
 
+        [HttpPost("DeletarPorId")]
+        public async Task<IActionResult> DeletarPorId([FromBody] DeletarPorIdModel payload)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(payload.Id) || string.IsNullOrWhiteSpace(payload.NomeBase))
+                {
+                    return BadRequest(new { status = "erro", message = "Parâmetros obrigatórios não informados." });
+                }
+
+                await _googleSheetsService.DeletarLinhaPorIdAsync(payload.Id, payload.NomeBase);
+
+                return Ok(new { status = "sucesso", message = $"Lançamentos com ID '{payload.Id}' deletados com sucesso." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+
+
         [HttpGet("TodasComprasPorPessoa")]
         public IActionResult GetAllComprasPorPessoa()
         {

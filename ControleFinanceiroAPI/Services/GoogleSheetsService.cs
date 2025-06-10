@@ -636,9 +636,79 @@ public class GoogleSheetsService
             return (false, ex.Message, null);
         }
     }
+    public async Task DeletarLinhaPorIdAsync(string id, string nomeBase)
+    {
+        try
+        {
+            // Passo 1: Obtemos todas as linhas da aba
+            var range = $"{nomeBase}!A:H";
+            var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+            var response = await request.ExecuteAsync();
+            var valores = response.Values;
 
+            if (valores == null || valores.Count == 0)
+                return;
 
+            // Passo 2: Identificamos as linhas que têm o id na primeira coluna (coluna A)
+            var linhasParaExcluir = new List<int>();
+            for (int i = 0; i < valores.Count; i++)
+            {
+                if (valores[i].Count > 0 && valores[i][0]?.ToString() == id)
+                {
+                    // Salvamos o índice real da linha na planilha (linha 1-based)
+                    linhasParaExcluir.Add(i + 1);
+                }
+            }
 
+            if (!linhasParaExcluir.Any())
+                return;
+
+            // Passo 3: Excluímos as linhas de baixo para cima
+            linhasParaExcluir.Sort();
+            linhasParaExcluir.Reverse();
+
+            foreach (var linha in linhasParaExcluir)
+            {
+                var deleteRequest = new Request
+                {
+                    DeleteDimension = new DeleteDimensionRequest
+                    {
+                        Range = new DimensionRange
+                        {
+                            SheetId = await ObterSheetIdPorNome(nomeBase),
+                            Dimension = "ROWS",
+                            StartIndex = linha - 1, // zero-based
+                            EndIndex = linha       // exclusive
+                        }
+                    }
+                };
+
+                var batchRequest = new BatchUpdateSpreadsheetRequest
+                {
+                    Requests = new List<Request> { deleteRequest }
+                };
+
+                await _service.Spreadsheets.BatchUpdate(batchRequest, SpreadsheetId).ExecuteAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Logue ou trate o erro conforme necessário
+            Console.WriteLine($"Erro ao excluir linhas com ID '{id}': {ex.Message}");
+            throw;
+        }
+    }
+
+    private async Task<int> ObterSheetIdPorNome(string nomeAba)
+    {
+        var spreadsheet = await _service.Spreadsheets.Get(SpreadsheetId).ExecuteAsync();
+        var sheet = spreadsheet.Sheets.FirstOrDefault(s => s.Properties.Title.Equals(nomeAba, StringComparison.OrdinalIgnoreCase));
+
+        if (sheet == null)
+            throw new Exception($"A aba '{nomeAba}' não foi encontrada na planilha.");
+
+        return (int)sheet.Properties.SheetId;
+    }
 
 
     public int? ObterIndiceDaLinhaPorId(string idLan)
