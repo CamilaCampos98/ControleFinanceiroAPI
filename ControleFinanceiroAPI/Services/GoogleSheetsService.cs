@@ -522,18 +522,18 @@ public class GoogleSheetsService
                 Cartao = row[9].ToString()
             }).ToList();
 
-            // Filtrar Config para pessoa e mesAno
             var dadosConfig = configs
-                .Where(c => c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && c.mesAno == mesAno)
-                .ToList();
+                             .Where(c => c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && c.mesAno == mesAno)
+                             .ToList();
 
-            if (!dadosConfig.Any())
-                return (false, $"Não há dados para {pessoa} no período {mesAno}.", null);
+            // Mesmo que não haja dados, consideramos salário e extras como 0
+            var salario = dadosConfig.Any()
+                ? dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase)).Sum(c => c.Valor)
+                : 0;
 
-            var salario = dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase))
-                                    .Sum(c => c.Valor);
-
-            var extra = dadosConfig.Sum(c => c.Extras);
+            var extra = dadosConfig.Any()
+                ? dadosConfig.Sum(c => c.Extras)
+                : 0;
 
             // Filtrar fixos para pessoa e mesAno (mesAno convertido para string)
             var fixosPessoa = fixos
