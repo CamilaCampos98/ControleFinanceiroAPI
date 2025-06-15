@@ -253,6 +253,25 @@ namespace ControleFinanceiroAPI.Controllers
 
             return Ok("Compra atualizada com sucesso.");
         }
+
+        [HttpGet("GetCartoes")]
+        public async Task<ActionResult<List<string>>> GetCartoes()
+        {
+            try
+            {
+                var cartoes = await _googleSheetsService.GetCartoesAsync();
+
+                if (cartoes == null || cartoes.Count == 0)
+                    return NoContent(); // 204
+
+                return Ok(cartoes); // 200 com lista de strings
+            }
+            catch (Exception ex)
+            {
+                // Em produção, logue o erro
+                return StatusCode(500, $"Erro ao buscar cartões: {ex.Message}");
+            }
+        }
         #region FIXOS
         [HttpGet("ListarFixos")]
         public async Task<IActionResult> ListarFixos([FromQuery] string pessoa)

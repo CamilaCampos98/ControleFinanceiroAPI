@@ -16,6 +16,7 @@ public class GoogleSheetsService
     private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM";
     private readonly string SheetName = "Controle";
     private readonly string rangeFixo = "Fixos!A:H";
+    private readonly string CartoesSheet = "Cartoes";
 
     private readonly SheetsService _service;
 
@@ -977,10 +978,28 @@ public class GoogleSheetsService
         return (dataBase, fim);
     }
 
+    public async Task<List<string>> GetCartoesAsync()
+    {
+        var range = $"{CartoesSheet}!A2:A"; // Exemplo: começa da célula A2 (ignora cabeçalho)
+        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+        var response = await request.ExecuteAsync();
+        var values = response.Values;
 
-    #region FIXOS
+        var result = new List<string>();
+        if (values != null && values.Count > 0)
+        {
+            foreach (var row in values)
+            {
+                result.Add(row[0].ToString());
+            }
+        }
 
-    public async Task DeletarLinha(int rowIndex)
+        return result;
+    }
+
+#region FIXOS
+
+public async Task DeletarLinha(int rowIndex)
     {
         var request = _service.Spreadsheets.Values.Clear(new ClearValuesRequest(), SpreadsheetId, $"{"Fixos"}!A{rowIndex}:H{rowIndex}");
         await request.ExecuteAsync();
