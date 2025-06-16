@@ -274,7 +274,7 @@ namespace ControleFinanceiroAPI.Controllers
         }
         #region FIXOS
         [HttpGet("ListarFixos")]
-        public async Task<IActionResult> ListarFixos([FromQuery] string pessoa)
+        public async Task<IActionResult> ListarFixos([FromQuery] string pessoa, [FromQuery] string periodo)
         {
             try
             {
@@ -297,6 +297,7 @@ namespace ControleFinanceiroAPI.Controllers
 
                     // Se a coluna Pessoa (index 3) for diferente da pessoa buscada, pula
                     if (linha[3]?.ToString()?.Trim().ToUpper() != pessoa.ToUpper()) continue;
+                    if (linha[2]?.ToString() != periodo.ToString()) continue;
 
                     var fixo = new FixoModel
                     {
@@ -572,6 +573,25 @@ namespace ControleFinanceiroAPI.Controllers
             catch (Exception ex)
             {
                 return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+
+        [HttpGet("GetTiposFixos")]
+        public async Task<ActionResult<List<string>>> GetTipoFixos()
+        {
+            try
+            {
+                var fixos = await _googleSheetsService.GetFixosTipoAsync();
+
+                if (fixos == null || fixos.Count == 0)
+                    return NoContent(); // 204
+
+                return Ok(fixos); // 200 com lista de strings
+            }
+            catch (Exception ex)
+            {
+                // Em produção, logue o erro
+                return StatusCode(500, $"Erro ao buscar cartões: {ex.Message}");
             }
         }
         #endregion

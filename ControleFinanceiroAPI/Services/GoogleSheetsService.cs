@@ -17,6 +17,7 @@ public class GoogleSheetsService
     private readonly string SheetName = "Controle";
     private readonly string rangeFixo = "Fixos!A:H";
     private readonly string CartoesSheet = "Cartoes";
+    private readonly string FixosTipoSheet = "TiposFixos";
 
     private readonly SheetsService _service;
 
@@ -999,7 +1000,7 @@ public class GoogleSheetsService
 
 #region FIXOS
 
-public async Task DeletarLinha(int rowIndex)
+    public async Task DeletarLinha(int rowIndex)
     {
         var request = _service.Spreadsheets.Values.Clear(new ClearValuesRequest(), SpreadsheetId, $"{"Fixos"}!A{rowIndex}:H{rowIndex}");
         await request.ExecuteAsync();
@@ -1135,6 +1136,24 @@ public async Task DeletarLinha(int rowIndex)
         return false; // Não encontrou o ID
     }
 
+    public async Task<List<string>> GetFixosTipoAsync()
+    {
+        var range = $"{FixosTipoSheet}!A2:A"; // Exemplo: começa da célula A2 (ignora cabeçalho)
+        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+        var response = await request.ExecuteAsync();
+        var values = response.Values;
+
+        var result = new List<string>();
+        if (values != null && values.Count > 0)
+        {
+            foreach (var row in values)
+            {
+                result.Add(row[0].ToString());
+            }
+        }
+
+        return result;
+    }
 
     #endregion
 
