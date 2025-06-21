@@ -1157,6 +1157,25 @@ public class GoogleSheetsService
 
     #endregion
 
+    public async Task<List<UsuarioModel>> ObterUsuariosAsync()
+    {
+        var range = "usuarios!A2:B"; // Assume primeira linha como header
+        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+        var response = await request.ExecuteAsync();
+
+        var result = new List<UsuarioModel>();
+        foreach (var row in response.Values)
+        {
+            if (row.Count >= 2)
+                result.Add(new UsuarioModel
+                {
+                    Usuario = row[0].ToString(),
+                    Senha = row[1].ToString()
+                });
+        }
+
+        return result;
+    }
 
     internal class CartaoTipoResumo
     {
