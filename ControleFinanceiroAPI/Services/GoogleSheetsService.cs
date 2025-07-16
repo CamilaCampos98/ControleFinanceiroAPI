@@ -161,311 +161,55 @@ public class GoogleSheetsService
         return idList.Max() + 1;
     }
 
-    public (bool Success, string Message, object? Data) GetResumoPorPessoaEPeriodo(string pessoa, DateTime inicio, DateTime fim)
+
+    public (bool Success, string Message, List<ResumoPessoaMesDTO>? Data) ResumoGeralPorMes()
     {
         try
         {
-            var linhas = ReadData($"{SheetName}!A:J");
+            var linhasControle = ReadData("Controle!A1:J");
+            var configData = ReadData("Config!A1:F");
+            var fixosData = ReadData("Fixos!A1:H");
 
-            if (linhas == null || linhas.Count <= 1)
-                return (false, "Nenhum dado encontrado na planilha.", null);
+            if (linhasControle == null || configData == null || fixosData == null)
+                return (false, "Dados insuficientes nas planilhas.", null);
 
-            var header = linhas[0];
+            var hoje = DateTime.Today;
+            DateTime mesInicio = hoje.Day <= 8 ? new DateTime(hoje.Year, hoje.Month, 1).AddMonths(-1) : new DateTime(hoje.Year, hoje.Month, 1);
+            int anoAtual = mesInicio.Year;
 
-            // Leitura da aba Config para buscar o salário e extras
-            var config = ReadData("Config!A:F");
+            // Meses de mesInicio até Dezembro do mesmo ano
+            var meses = Enumerable.Range(mesInicio.Month, 12 - mesInicio.Month + 1)
+                                  .Select(m => new DateTime(anoAtual, m, 1))
+                                  .ToList();
 
-            decimal salario = 0m;
-            decimal extras = 0m;
-
-            var competencia = ObterMesAnoCompetencia(inicio);
-
-            foreach (var linha in config.Skip(1))
-            {
-                var pessoaConfig = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "";
-                var mesAno = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
-
-                if (string.Equals(pessoaConfig, pessoa, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(mesAno, competencia, StringComparison.OrdinalIgnoreCase))
-                {
-                    salario = ParseDecimal(linha.ElementAtOrDefault(2)?.ToString());
-                    extras = ParseDecimal(linha.ElementAtOrDefault(5)?.ToString());
-                    break;
-                }
-            }
-
-            if (salario == 0)
-            {
-                return (false, "Salário não encontrado na aba Config para essa pessoa e período.", null);
-            }
-
-            decimal totalRecebido = salario + extras;
-
-            var comprasFiltradas = new List<Dictionary<string, object>>();
-            var resumoPorCartao = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-            var resumoPorCartaoTipo = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-
-            decimal totalGasto = 0;
-
-            for (int i = 1; i < linhas.Count; i++)
-            {
-                var linha = linhas[i];
-
-                var pessoaLinha = linha.ElementAtOrDefault(7)?.ToString()?.Trim() ?? "";
-                var dataStr = linha.ElementAtOrDefault(6)?.ToString()?.Trim() ?? "";
-                var cartao = linha.ElementAtOrDefault(9)?.ToString()?.Trim() ?? "";
-
-                if (!DateTime.TryParse(dataStr, out DateTime dataCompra))
-                    continue;
-
-                if (string.IsNullOrEmpty(cartao))
-                    continue;
-
-                string cartaoBase = RemoverPalavras(cartao);
-
-                // Verifica se a compra está dentro do filtro da tela
-                if (dataCompra >= inicio && dataCompra <= fim)
-                {
-                    var valor = ParseDecimal(linha.ElementAtOrDefault(4)?.ToString());
-
-                    // Verifica se a compra é da pessoa
-                    if (string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
-                    {
-                        totalGasto += valor;
-
-                        var compra = new Dictionary<string, object>();
-                        for (int j = 0; j < header.Count; j++)
-                        {
-                            var chave = header[j]?.ToString() ?? $"Coluna{j}";
-                            var valorCelula = linha.ElementAtOrDefault(j) ?? "";
-                            compra[chave] = valorCelula;
-                        }
-                        comprasFiltradas.Add(compra);
-                    }
-
-                    // ----------- Agrupamento por cartão considerando o ciclo específico -----------
-                    var (inicioCorte, fimCorte) = ObterPeriodoCortePorCartao(dataCompra, cartaoBase);
-
-                    if (dataCompra >= inicioCorte && dataCompra <= fimCorte)
-                    {
-                        // Se for cartão Bradesco, soma apenas se for da pessoa
-                        if (cartaoBase.Equals("Bradesco", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
-                            {
-                                continue;
-                            }
-                        }
-
-                        // Soma no total do cartão
-                        if (resumoPorCartao.ContainsKey(cartaoBase))
-                            resumoPorCartao[cartaoBase] += valor;
-                        else
-                            resumoPorCartao[cartaoBase] = valor;
-
-                        // Agrupa por tipo (Titular ou Adicional)
-                        string tipo = cartao.Contains("Adicional", StringComparison.OrdinalIgnoreCase) ? "Adicional" :
-                                      cartao.Contains("Titular", StringComparison.OrdinalIgnoreCase) ? "Titular" : "Outro";
-
-                        string chave = $"{cartaoBase}|{tipo}";
-
-                        if (resumoPorCartaoTipo.ContainsKey(chave))
-                            resumoPorCartaoTipo[chave] += valor;
-                        else
-                            resumoPorCartaoTipo[chave] = valor;
-                    }
-                }
-            }
-
-            decimal totalGastoFixos = 0;
-
-            // Ler dados da aba Fixos
-            var linhasFixos = ReadData(rangeFixo);
-
-            if (linhasFixos != null && linhasFixos.Count > 1)
-            {
-                for (int i = 1; i < linhasFixos.Count; i++)
-                {
-                    var linhaFixo = linhasFixos[i];
-
-                    var pessoaFixo = linhaFixo.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
-                    var mesAnoFixo = linhaFixo.ElementAtOrDefault(2)?.ToString()?.Trim() ?? "";
-
-                    if (!string.Equals(pessoaFixo, pessoa, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    if (mesAnoFixo == competencia)
-                    {
-                        var valorFixo = ParseDecimal(linhaFixo.ElementAtOrDefault(5)?.ToString());
-                        totalGasto += valorFixo;
-                        totalGastoFixos += valorFixo;
-                    }
-                }
-            }
-
-            var listaCartaoTipo = resumoPorCartaoTipo.Select(item =>
-            {
-                var partes = item.Key.Split('|');
-                return new CartaoTipoResumo
-                {
-                    Cartao = partes.ElementAtOrDefault(0) ?? "Desconhecido",
-                    Tipo = partes.ElementAtOrDefault(1) ?? "Desconhecido",
-                    Valor = item.Value
-                };
-            }).OrderBy(x => x.Cartao).ToList();
-
-            var saldoRestante = totalRecebido - totalGasto;
-
-            var resultado = new
-            {
-                Pessoa = pessoa,
-                Periodo = $"{inicio:dd/MM/yyyy} a {fim:dd/MM/yyyy}",
-                Salario = salario,
-                Extras = extras,
-                TotalRecebido = totalRecebido,
-                TotalGasto = totalGasto,
-                SaldoRestante = saldoRestante,
-                Compras = comprasFiltradas,
-                GastosFixos = totalGastoFixos,
-                resumoPorCartao = resumoPorCartao,
-                resumoPorCartaoTipo = listaCartaoTipo
-            };
-
-            return (true, "Sucesso", resultado);
-        }
-        catch (Exception ex)
-        {
-            return (false, $"Erro ao acessar a planilha: {ex.Message}", null);
-        }
-    }
-
-
-    public (bool Success, string Message, List<ResumoPessoaDTO>? Data) ResumoGeral()
-    {
-        try
-        {
-            var linhas = ReadData($"{SheetName}!A:J");
-            if (linhas == null || linhas.Count <= 1)
-                return (false, "Nenhum dado encontrado na planilha.", null);
-
-            var config = ReadData("Config!A:F");
-            if (config == null || config.Count <= 1)
-                return (false, "Nenhum dado encontrado na aba Config.", null);
-
-            var linhasFixos = ReadData(rangeFixo);
-
-            var pessoas = config.Skip(1)
+            var pessoas = configData.Skip(1)
                 .Select(l => l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "")
-                .Where(p => !string.IsNullOrEmpty(p))
+                .Where(p => !string.IsNullOrWhiteSpace(p))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // 📅 Definir mês vigente baseado na data atual e regra do dia 8
-            DateTime hoje = DateTime.Today;
-            DateTime mesVigente;
-
-            if (hoje.Day <= 8)
-                mesVigente = hoje.AddMonths(-1);
-            else
-                mesVigente = hoje;
-
-            int mes = mesVigente.Month;
-            int ano = mesVigente.Year;
-
-            var resultado = new List<ResumoPessoaDTO>();
+            var resultado = new List<ResumoPessoaMesDTO>();
 
             foreach (var pessoa in pessoas)
             {
-                // 🔍 Buscar configs da pessoa no mês vigente
-                var linhaSalario = config.Skip(1)
-                    .FirstOrDefault(l =>
-                    {
-                        var pessoaLinha = l.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "";
-                        var mesAnoStr = l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
-
-                        if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
-                            return false;
-
-                        if (!DateTime.TryParseExact(mesAnoStr, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoData))
-                            return false;
-
-                        return mesAnoData.Month == mes && mesAnoData.Year == ano;
-                    });
-
-                if (linhaSalario == null)
-                    continue; // Se não achou, ignora a pessoa
-
-                decimal salario = ParseDecimal(linhaSalario?.ElementAtOrDefault(2)?.ToString());
-                decimal extras = ParseDecimal(linhaSalario?.ElementAtOrDefault(5)?.ToString());
-
-                decimal totalRecebido = salario + extras;
-
-                // 📆 Intervalo do mês vigente
-                var inicioMes = new DateTime(ano, mes, 1);
-                var fimMes = inicioMes.AddMonths(1).AddDays(-1);
-
-                // 🛒 Compras
-                var comprasPessoa = linhas.Skip(1)
-                    .Where(l =>
-                    {
-                        var dataStr = l.ElementAtOrDefault(6)?.ToString()?.Trim() ?? "";
-                        var pessoaLinha = l.ElementAtOrDefault(7)?.ToString()?.Trim() ?? "";
-
-                        if (!DateTime.TryParse(dataStr, out DateTime dataCompra))
-                            return false;
-
-                        return string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase) &&
-                               dataCompra >= inicioMes && dataCompra <= fimMes;
-                    })
-                    .Select(l => new
-                    {
-                        Data = DateTime.TryParse(l.ElementAtOrDefault(6)?.ToString()?.Trim(), out DateTime d) ? d : (DateTime?)null,
-                        Descricao = l.ElementAtOrDefault(3)?.ToString() ?? "",
-                        Valor = ParseDecimal(l.ElementAtOrDefault(4)?.ToString())
-                    })
-                    .ToList();
-
-                decimal totalGastosCompras = comprasPessoa.Sum(c => c.Valor);
-
-                // 🏠 Fixos
-                decimal totalGastosFixos = 0;
-                if (linhasFixos != null && linhasFixos.Count > 1)
+                foreach (var dataMes in meses)
                 {
-                    totalGastosFixos = linhasFixos.Skip(1)
-                        .Where(l =>
+                    string mesAnoStr = dataMes.ToString("MM/yyyy");
+
+                    var resumo = GetResumoPorPessoaEPeriodoInternal(pessoa, mesAnoStr, (List<IList<object>>)configData, (List<IList<object>>)fixosData, (List<IList<object>>)linhasControle);
+                    if (resumo.Success && resumo.Data != null)
+                    {
+                        resultado.Add(new ResumoPessoaMesDTO
                         {
-                            var pessoaLinha = l.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
-                            var mesAnoFixo = l.ElementAtOrDefault(2)?.ToString()?.Trim() ?? "";
-
-                            if (!string.Equals(pessoaLinha, pessoa, StringComparison.OrdinalIgnoreCase))
-                                return false;
-
-                            if (!DateTime.TryParseExact(mesAnoFixo, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoData))
-                                return false;
-
-                            return mesAnoData.Year == ano && mesAnoData.Month == mes;
-                        })
-                        .Sum(l => ParseDecimal(l.ElementAtOrDefault(5)?.ToString()));
+                            Pessoa = pessoa,
+                            MesAno = mesAnoStr,
+                            SaldoRestante = resumo.Data.SaldoRestante
+                        });
+                    }
                 }
-
-                // 🧮 Calcular saldo
-                decimal totalGastos = totalGastosCompras + totalGastosFixos;
-                decimal saldoRestante = totalRecebido - totalGastos;
-
-                // 📅 Última compra
-                var ultimaCompra = comprasPessoa.OrderByDescending(c => c.Data)
-                    .FirstOrDefault();
-
-                resultado.Add(new ResumoPessoaDTO
-                {
-                    Pessoa = pessoa,
-                    SaldoRestante = saldoRestante,
-                    UltimaCompra = ultimaCompra?.Data?.ToString("dd/MM/yyyy") ?? "-",
-                    DescricaoUltimaCompra = ultimaCompra?.Descricao ?? "-"
-                });
             }
 
-            return (true, "Sucesso", resultado.OrderBy(x => x.Pessoa).ToList());
+            return (true, "Sucesso", resultado.OrderBy(x => x.Pessoa).ThenBy(x => x.MesAno).ToList());
         }
         catch (Exception ex)
         {
@@ -473,7 +217,115 @@ public class GoogleSheetsService
         }
     }
 
+    private (bool Success, string Message, dynamic Data) GetResumoPorPessoaEPeriodoInternal(string pessoa, string mesAno, List<IList<object>> configData, List<IList<object>> fixosData, List<IList<object>> controleData)
+    {
+        try
+        {
+            var configs = configData.Skip(1).Select(row => new
+            {
+                Pessoa = row[0]?.ToString() ?? "",
+                Fonte = row[1]?.ToString() ?? "",
+                Valor = ParseDecimal(row[2]?.ToString()),
+                mesAno = row[3]?.ToString() ?? "",
+                ValorHora = ParseDecimal(row[4]?.ToString()),
+                Extras = ParseDecimal(row[5]?.ToString())
+            }).ToList();
 
+            var fixos = fixosData.Skip(1).Select(row => new
+            {
+                Id = row[0]?.ToString(),
+                Tipo = row[1]?.ToString(),
+                mesAno = row[2]?.ToString(),
+                Pessoa = row[3]?.ToString(),
+                Vencimento = row[4]?.ToString(),
+                Valor = ParseDecimal(row[5]?.ToString()),
+                Pago = row[6]?.ToString(),
+                Dividido = row[7]?.ToString()
+            }).ToList();
+
+            var controle = controleData.Skip(1).Select(row => new
+            {
+                IdLan = row[0]?.ToString(),
+                FormaPgto = row[1]?.ToString(),
+                Parcela = row[2]?.ToString(),
+                Compra = row[3]?.ToString(),
+                Valor = ParseDecimal(row[4]?.ToString()),
+                mesAno = row[5]?.ToString(),
+                Data = DateTime.TryParse(row[6]?.ToString(), out var dt) ? dt : DateTime.MinValue,
+                Pessoa = row[7]?.ToString(),
+                Fonte = row[8]?.ToString(),
+                Cartao = row[9]?.ToString()
+            }).ToList();
+
+            // Mapeamento dos ciclos dos cartões
+            Dictionary<string, (int diaInicio, int diaFim)> ciclosCartoes = new()
+        {
+            { "ITAU", (8, 7) },
+            { "SANTANDER", (10, 9) },
+            { "BRADESCO", (4, 3) },
+            { "C&A", (6, 5) },
+            { "RIACHUELO", (11, 10) }
+        };
+
+            // Mes/Ano
+            var partes = mesAno.Split('/');
+            int mes = int.Parse(partes[0]);
+            int ano = int.Parse(partes[1]);
+
+            // Função para calcular o período do cartão
+            (DateTime inicio, DateTime fim) ObterPeriodoCartao(string nomeCartao)
+            {
+                string cartaoBase = RemoverPalavras(nomeCartao?.ToUpper() ?? "");
+
+                if (!ciclosCartoes.TryGetValue(cartaoBase, out var ciclo))
+                {
+                    ciclo = (8, 7); // padrão
+                }
+
+                var inicio = new DateTime(ano, mes, ciclo.diaInicio);
+                var fim = new DateTime(ano, mes, 1).AddMonths(1).AddDays(ciclo.diaFim - 1);
+
+                return (inicio, fim);
+            }
+
+            // Salário e extras
+            var dadosConfig = configs
+                .Where(c => c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && c.mesAno == mesAno)
+                .ToList();
+
+            decimal salario = dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase)).Sum(c => c.Valor);
+            decimal extras = dadosConfig.Sum(c => c.Extras);
+
+            // Fixos
+            decimal fixosPessoa = fixos
+                .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && f.mesAno == mesAno)
+                .Sum(f => f.Valor);
+
+            // Compras no controle com base no cartão
+            var controlePessoa = controle
+                .Where(c =>
+                {
+                    if (!c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase))
+                        return false;
+
+                    var (inicio, fim) = ObterPeriodoCartao(c.Cartao);
+                    return c.Data.Date >= inicio && c.Data.Date <= fim;
+                })
+                .ToList();
+
+            decimal totalGastoControle = controlePessoa.Sum(c => c.Valor);
+            decimal saldoFinal = (salario + extras) - fixosPessoa - totalGastoControle;
+
+            return (true, "Sucesso", new
+            {
+                SaldoRestante = saldoFinal
+            });
+        }
+        catch (Exception ex)
+        {
+            return (false, $"Erro: {ex.Message}", null);
+        }
+    }
 
     public (bool success, string message, object data) GetResumoPorPessoaEPeriodo(string pessoa, string mesAno)
     {
@@ -593,13 +445,15 @@ public class GoogleSheetsService
                                             var cartaoBase = RemoverPalavras(c.Cartao ?? "").ToUpper();
                                             var (inicio, fim) = ObterPeriodoCartao(cartaoBase);
 
-                                            if (cartaoBase == "BRADESCO")
+                                            // Se for BRADESCO (ou outro sem adicional), filtra por pessoa
+                                            if (cartaoBase == "BRADESCO" || cartaoBase == "C&A" || cartaoBase == "RIACHUELO")
                                             {
-                                                return c.Data.Date >= inicio && c.Data.Date <= fim &&
-                                                       c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
+                                                return c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
+                                                       c.Data.Date >= inicio && c.Data.Date <= fim &&
                                                        !string.IsNullOrEmpty(c.Cartao);
                                             }
 
+                                            // Senão, traz todos para separar Titular e Adicional
                                             return c.Data.Date >= inicio && c.Data.Date <= fim &&
                                                    !string.IsNullOrEmpty(c.Cartao);
                                         })
