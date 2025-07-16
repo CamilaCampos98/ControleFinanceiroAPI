@@ -335,16 +335,15 @@ namespace ControleFinanceiroAPI.Controllers
                 if (string.IsNullOrEmpty(payload.Pessoa))
                     return BadRequest(new { status = "erro", message = "Campo 'Pessoa' é obrigatório." });
 
-                // 🔍 Ler dados atuais da planilha
                 var linhasAtuais = await _googleSheetsService.ObterValores();
 
                 var linhasParaInserir = new List<IList<object>>();
                 var fixosInseridos = new List<object>();
+                var fixosIgnorados = new List<object>();
 
                 foreach (var fixo in payload.Data)
                 {
-                    // Verifica se já existe
-                    var linhaExistente = linhasAtuais.Skip(1).FirstOrDefault(l =>
+                    var jaExiste = linhasAtuais.Skip(1).Any(l =>
                     {
                         var tipo = l.ElementAtOrDefault(1)?.ToString()?.Trim();
                         var mesAno = l.ElementAtOrDefault(2)?.ToString()?.Trim();
@@ -355,36 +354,26 @@ namespace ControleFinanceiroAPI.Controllers
                                string.Equals(pessoa, payload.Pessoa, StringComparison.OrdinalIgnoreCase);
                     });
 
-                    string novoMesAno = fixo.MesAno;
-
-                    if (linhaExistente != null)
+                    if (jaExiste)
                     {
-                        // 🔥 Se já existe, soma +1 mês no MesAno
-                        if (DateTime.TryParseExact(fixo.MesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dataMesAno))
-                        {
-                            var proximoMes = dataMesAno.AddMonths(1);
-                            novoMesAno = $"{proximoMes:MM/yyyy}";
-                        }
-                        else
-                        {
-                            return BadRequest(new { status = "erro", message = $"Mês/Ano inválido: {fixo.MesAno}" });
-                        }
+                        fixosIgnorados.Add(new { fixo.Tipo, fixo.MesAno, Pessoa = payload.Pessoa });
+                        continue;
                     }
 
                     var linha = new List<object>
                                 {
-                                    fixo.Id, // 🔗 Novo Id
+                                    fixo.Id,
                                     fixo.Tipo,
-                                    novoMesAno,
+                                    fixo.MesAno,
                                     payload.Pessoa,
                                     fixo.Vencimento,
-                                    "",    // 🔸 Valor
-                                    "",    // 🔸 Pago
+                                    fixo.Valor ?? "",
+                                    fixo.Pago ?? "",
                                     fixo.Dividido
                                 };
 
                     linhasParaInserir.Add(linha);
-                    fixosInseridos.Add(new { fixo.Tipo, MesAno = novoMesAno, Pessoa = payload.Pessoa });
+                    fixosInseridos.Add(new { fixo.Tipo, fixo.MesAno, Pessoa = payload.Pessoa });
                 }
 
                 if (linhasParaInserir.Any())
@@ -395,9 +384,68 @@ namespace ControleFinanceiroAPI.Controllers
                 return Ok(new
                 {
                     status = "sucesso",
-                    message = linhasParaInserir.Any() ? "Processo concluído com sucesso." : "Nenhum fixo novo para inserir.",
-                    inseridos = fixosInseridos
+                    message = "Processo concluído com sucesso.",
+                    inseridos = fixosInseridos,
+                    ignorados = fixosIgnorados
                 });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { status = "erro", message = ex.Message });
+            }
+        }
+
+
+        [HttpPost("CopiarFixos")]
+        public async Task<IActionResult> CopiarFixos([FromBody] CopiaFixosPayload payload)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(payload.Pessoa))
+                    return BadRequest(new { status = "erro", message = "Pessoa não informada." });
+
+                if (string.IsNullOrWhiteSpace(payload.MesAnoDestino))
+                    return BadRequest(new { status = "erro", message = "Mês de destino não informado." });
+
+                var linhas = await _googleSheetsService.ObterValores();
+
+                var fixosAnteriores = linhas.Skip(1)
+                    .Where(l =>
+                        string.Equals(l.ElementAtOrDefault(3)?.ToString(), payload.Pessoa, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(l.ElementAtOrDefault(2)?.ToString(), payload.MesAnoOrigem, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (!fixosAnteriores.Any())
+                    return NotFound(new { status = "erro", message = "Nenhum fixo encontrado no mês de origem." });
+
+                // verifica se já existem para o mês destino
+                var jaExistem = linhas.Skip(1)
+                    .Any(l =>
+                        string.Equals(l.ElementAtOrDefault(3)?.ToString(), payload.Pessoa, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(l.ElementAtOrDefault(2)?.ToString(), payload.MesAnoDestino, StringComparison.OrdinalIgnoreCase));
+
+                if (jaExistem)
+                    return Conflict(new { status = "erro", message = $"Já existem fixos cadastrados para {payload.MesAnoDestino}." });
+
+                // Calcula vencimento baseado no mês de destino
+                DateTime.TryParseExact(payload.MesAnoDestino, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dataDestino);
+                var vencimento = new DateTime(dataDestino.Year, dataDestino.Month + 1, 10).ToString("yyyy-MM-dd");
+
+                IList<IList<object>> novasLinhas = fixosAnteriores.Select(l => (IList<object>)new List<object>
+                                                    {
+                                                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + new Random().Next(1000, 9999),
+                                                        l[1], // Tipo
+                                                        payload.MesAnoDestino,
+                                                        payload.Pessoa,
+                                                        vencimento, // ✅ novo vencimento coerente com o mês destino
+                                                        l[5], // Valor
+                                                        l[6], // Pago
+                                                        l[7]  // Dividido
+                                                    }).ToList();
+
+                await _googleSheetsService.AdicionarLinhas(novasLinhas);
+
+                return Ok(new { status = "sucesso", message = $"Fixos copiados de {payload.MesAnoOrigem} para {payload.MesAnoDestino}." });
             }
             catch (Exception ex)
             {
@@ -533,48 +581,43 @@ namespace ControleFinanceiroAPI.Controllers
         }
 
         [HttpGet("BuscaDataRef")]
-        public async Task<IActionResult> BuscaDataRef()
+        public async Task<IActionResult> BuscaDataRef([FromQuery] string mesAno)
         {
             try
             {
+                if (string.IsNullOrWhiteSpace(mesAno))
+                    return BadRequest(new { status = "erro", message = "O parâmetro 'mesAno' é obrigatório (formato MM/yyyy)." });
+
+                // Validação de formato
+                if (!DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dataRef))
+                    return BadRequest(new { status = "erro", message = "Formato inválido para 'mesAno'. Use MM/yyyy." });
+
                 var dados = _googleSheetsService.ReadData("Config!A:F");
 
                 if (dados == null || dados.Count == 0)
-                    return NotFound(new { status = "erro", message = "Nenhum dado encontrado." });
+                    return NotFound(new { status = "erro", message = "Nenhum dado encontrado na aba Config." });
 
-                // Pega a coluna 3 (índice 2), ignora cabeçalhos e linhas sem valor
+                // Pega apenas a coluna da data (coluna D - index 3), ignora o cabeçalho
                 var datas = dados
-                    .Skip(1) // se a primeira linha é cabeçalho, senão remova essa linha
-                    .Select(linha => linha.Count > 3 ? linha[3]?.ToString() : null)
-                    .Where(mesAno => !string.IsNullOrWhiteSpace(mesAno))
-                    .Select(mesAno =>
-                    {
-                        // Tenta converter para DateTime no formato MM/yyyy
-                        if (DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-                            return dt;
-                        else
-                            return (DateTime?)null;
-                    })
-                    .Where(dt => dt.HasValue)
-                    .Select(dt => dt.Value)
+                    .Skip(1)
+                    .Select(l => l.Count > 3 ? l[3]?.ToString()?.Trim() : null)
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
                     .ToList();
 
-                if (!datas.Any())
-                    return NotFound(new { status = "erro", message = "Nenhuma data válida encontrada." });
+                // Verifica se o mês/ano informado já existe
+                var existe = datas.Any(s => string.Equals(s, mesAno, StringComparison.OrdinalIgnoreCase));
 
-                // Pega a data mais recente
-                var dataMaisRecente = datas.Max();
-
-                // Retorna no mesmo formato "MM/yyyy"
-                var mesAnoMaisRecente = dataMaisRecente.ToString("MM/yyyy");
-
-                return Ok(new { status = "sucesso", mesAno = mesAnoMaisRecente });
+                if (existe)
+                    return Ok(new { status = "sucesso", mesAno = mesAno });
+                else
+                    return NotFound(new { status = "erro", message = $"O mês {mesAno} ainda não foi preenchido na aba Config." });
             }
             catch (Exception ex)
             {
                 return StatusCode(500, new { status = "erro", message = ex.Message });
             }
         }
+
 
         [HttpGet("GetTiposFixos")]
         public async Task<ActionResult<List<string>>> GetTipoFixos()
