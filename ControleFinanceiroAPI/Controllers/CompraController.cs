@@ -427,9 +427,14 @@ namespace ControleFinanceiroAPI.Controllers
                 if (jaExistem)
                     return Conflict(new { status = "erro", message = $"Já existem fixos cadastrados para {payload.MesAnoDestino}." });
 
-                // Calcula vencimento baseado no mês de destino
-                DateTime.TryParseExact(payload.MesAnoDestino, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dataDestino);
-                var vencimento = new DateTime(dataDestino.Year, dataDestino.Month + 1, 10).ToString("yyyy-MM-dd");
+                // Extrai o vencimento com base no mês destino
+                if (!DateTime.TryParseExact(payload.MesAnoDestino, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dataDestino))
+                    return BadRequest(new { status = "erro", message = "Formato de mês destino inválido." });
+
+                int proximoMes = dataDestino.Month == 12 ? 1 : dataDestino.Month + 1;
+                int anoVencimento = dataDestino.Month == 12 ? dataDestino.Year + 1 : dataDestino.Year;
+
+                string vencimento = new DateTime(anoVencimento, proximoMes, 10).ToString("yyyy-MM-dd");
 
                 IList<IList<object>> novasLinhas = fixosAnteriores.Select(l => (IList<object>)new List<object>
                                                     {
