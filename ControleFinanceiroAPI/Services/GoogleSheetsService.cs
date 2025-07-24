@@ -203,7 +203,8 @@ public class GoogleSheetsService
                         {
                             Pessoa = pessoa,
                             MesAno = mesAnoStr,
-                            SaldoRestante = resumo.Data.SaldoRestante
+                            SaldoRestante = resumo.Data.SaldoRestante,
+                            ValorGuardado = resumo.Data.ValorGuardado 
                         });
                     }
                 }
@@ -314,11 +315,25 @@ public class GoogleSheetsService
                 .ToList();
 
             decimal totalGastoControle = controlePessoa.Sum(c => c.Valor);
+            //decimal saldoFinal = (salario + extras) - fixosPessoa - totalGastoControle;
+            decimal valorGuardado = fixos
+                .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
+                            f.mesAno == mesAno &&
+                            f.Tipo?.IndexOf("guardado", StringComparison.OrdinalIgnoreCase) >= 0)
+                .Sum(f => f.Valor);
+
+            var fixosSemGuardado = fixos
+                .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
+                            f.mesAno == mesAno &&
+                            f.Tipo?.IndexOf("guardado", StringComparison.OrdinalIgnoreCase) < 0)
+                .Sum(f => f.Valor);
+
             decimal saldoFinal = (salario + extras) - fixosPessoa - totalGastoControle;
 
             return (true, "Sucesso", new
             {
-                SaldoRestante = saldoFinal
+                SaldoRestante = saldoFinal,
+                ValorGuardado = valorGuardado
             });
         }
         catch (Exception ex)
