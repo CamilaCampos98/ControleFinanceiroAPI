@@ -3,6 +3,7 @@ using Google.Apis.Sheets.v4;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.Globalization;
+using static GoogleSheetsService;
 
 namespace ControleFinanceiroAPI.Controllers
 {
@@ -41,6 +42,17 @@ namespace ControleFinanceiroAPI.Controllers
 
             if (!DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoDate))
                 return BadRequest("mesAno inválido. Formato esperado: MM/yyyy (ex: 05/2025).");
+
+            // Obter ciclos de fatura do banco, planilha ou configuração
+            // Exemplo de ciclos fixos para demonstração
+            //var ciclosFatura = new List<CicloFatura>
+            //                    {
+            //                        new CicloFatura { Cartao = "ITAU", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 8), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 15) },
+            //                        new CicloFatura { Cartao = "SANTANDER", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 8), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 16) },
+            //                        new CicloFatura { Cartao = "BRADESCO", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 3), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 15) },
+            //                        new CicloFatura { Cartao = "C&A", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 5), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 20) },
+            //                        new CicloFatura { Cartao = "RIACHUELO", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 10), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 18) }
+            //                    };
 
             var (success, message, data) = _googleSheetsService.GetResumoPorPessoaEPeriodo(pessoa, mesAno);
 
