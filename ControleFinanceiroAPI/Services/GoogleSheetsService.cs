@@ -225,43 +225,98 @@ public class GoogleSheetsService
     List<IList<object>> fixosData,
     List<IList<object>> controleData)
     {
+        string tratativaAtual = "";
         try
         {
-            var configs = configData.Skip(1).Select(row => new
-            {
-                Pessoa = row[0]?.ToString() ?? "",
-                Fonte = row[1]?.ToString() ?? "",
-                Valor = ParseDecimal(row[2]?.ToString()),
-                mesAno = row[3]?.ToString() ?? "",
-                ValorHora = ParseDecimal(row[4]?.ToString()),
-                Extras = ParseDecimal(row[5]?.ToString())
-            }).ToList();
+            List<dynamic> configs = new List<dynamic>();
+            int linha = 0;
 
-            var fixos = fixosData.Skip(1).Select(row => new
+            foreach (var row in configData)
             {
-                Id = row[0]?.ToString(),
-                Tipo = row[1]?.ToString(),
-                mesAno = row[2]?.ToString(),
-                Pessoa = row[3]?.ToString(),
-                Vencimento = row[4]?.ToString(),
-                Valor = ParseDecimal(row[5]?.ToString()),
-                Pago = row[6]?.ToString(),
-                Dividido = row[7]?.ToString()
-            }).ToList();
+                linha++;
 
-            var controle = controleData.Skip(1).Select(row => new
+                try
+                {
+                    var config = new
+                    {
+                        Pessoa = row[0]?.ToString() ?? "",
+                        Fonte = row[1]?.ToString() ?? "",
+                        Valor = ParseDecimal(row[2]?.ToString()),
+                        mesAno = row[3]?.ToString() ?? "",
+                        ValorHora = ParseDecimal(row[4]?.ToString()),
+                        Extras = ParseDecimal(row[5]?.ToString())
+                    };
+
+                    configs.Add(config);
+                }
+                catch (Exception ex)
+                {
+                    var conteudoLinha = string.Join(", ", row.Select(c => c?.ToString() ?? ""));
+                    throw new Exception($"Erro ao processar Lista Configs - Linha {linha}: {conteudoLinha}. Detalhe: {ex.Message}", ex);
+                }
+            }
+
+
+            linha = 0;
+            List<dynamic> fixos = new List<dynamic>();
+            foreach (var row in fixosData)
             {
-                IdLan = row[0]?.ToString(),
-                FormaPgto = row[1]?.ToString(),
-                Parcela = row[2]?.ToString(),
-                Compra = row[3]?.ToString(),
-                Valor = ParseDecimal(row[4]?.ToString()),
-                mesAno = row[5]?.ToString(),
-                Data = DateTime.TryParse(row[6]?.ToString(), out var dt) ? dt : DateTime.MinValue,
-                Pessoa = row[7]?.ToString(),
-                Fonte = row[8]?.ToString(),
-                Cartao = row[9]?.ToString()
-            }).ToList();
+                linha++;
+                try
+                {
+                    var fixo = new
+                    {
+                        Id = row[0]?.ToString(),
+                        Tipo = row[1]?.ToString(),
+                        mesAno = row[2]?.ToString(),
+                        Pessoa = row[3]?.ToString(),
+                        Vencimento = row[4]?.ToString(),
+                        Valor = ParseDecimal(row[5]?.ToString()),
+                        Pago = row[6]?.ToString(),
+                        Dividido = row[7]?.ToString()
+                    };
+                    fixos.Add(fixo);
+                }
+                catch (Exception ex)
+                {
+                    var conteudoLinha = string.Join(", ", row.Select(c => c?.ToString() ?? ""));
+                    throw new Exception($"Erro ao processar Lista Fixos - Linha {linha}: {conteudoLinha}. Detalhe: {ex.Message}", ex);
+                }
+
+            }
+
+            linha = 0;
+            List<dynamic> controle = new List<dynamic>();
+            foreach (var row in controleData)
+            {
+
+                linha++;
+                try
+                {
+                    var contr = new
+                    {
+                        IdLan = row[0]?.ToString(),
+                        FormaPgto = row[1]?.ToString(),
+                        Parcela = row[2]?.ToString(),
+                        Compra = row[3]?.ToString(),
+                        Valor = ParseDecimal(row[4]?.ToString()),
+                        mesAno = row[5]?.ToString(),
+                        Data = DateTime.TryParse(row[6]?.ToString(), out var dt) ? dt : DateTime.MinValue,
+                        Pessoa = row[7]?.ToString(),
+                        Fonte = row[8]?.ToString(),
+                        Cartao = row[9]?.ToString()
+                    };
+
+                    controle.Add(contr);
+                }
+                catch (Exception ex)
+                {
+                    var conteudoLinha = string.Join(", ", row.Select(c => c?.ToString() ?? ""));
+                    throw new Exception($"Erro ao processar Lista Controle - Linha {linha}: {conteudoLinha}. Detalhe: {ex.Message}", ex);
+                }
+                
+            }
+
 
             // Fechamento fixo por cartão
             var fechamentoCartoes = new Dictionary<string, int>
@@ -304,13 +359,13 @@ public class GoogleSheetsService
                 .Where(c => c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && c.mesAno == mesAno)
                 .ToList();
 
-            decimal salario = dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase)).Sum(c => c.Valor);
-            decimal extras = dadosConfig.Sum(c => c.Extras);
+            decimal salario = dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase)).Sum(c => (decimal)c.Valor);
+            decimal extras = dadosConfig.Sum(c => (decimal)c.Extras);
 
             // Fixos
             decimal fixosPessoa = fixos
                 .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && f.mesAno == mesAno)
-                .Sum(f => f.Valor);
+                .Sum(f => (decimal)f.Valor);
 
             // Compras da pessoa no período
             var controlePessoa = controle
@@ -324,20 +379,20 @@ public class GoogleSheetsService
                 })
                 .ToList();
 
-            decimal totalGastoControle = controlePessoa.Sum(c => c.Valor);
+            decimal totalGastoControle = controlePessoa.Sum(c => (decimal)c.Valor);
 
             // Guardado
             decimal valorGuardado = fixos
                 .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
                             f.mesAno == mesAno &&
                             f.Tipo?.IndexOf("guardado", StringComparison.OrdinalIgnoreCase) >= 0)
-                .Sum(f => f.Valor);
+                .Sum(f => (decimal)f.Valor);
 
             var fixosSemGuardado = fixos
                 .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
                             f.mesAno == mesAno &&
                             f.Tipo?.IndexOf("guardado", StringComparison.OrdinalIgnoreCase) < 0)
-                .Sum(f => f.Valor);
+                .Sum(f => (decimal)f.Valor);
 
             decimal saldoFinal = (salario + extras) - fixosPessoa - totalGastoControle;
 
