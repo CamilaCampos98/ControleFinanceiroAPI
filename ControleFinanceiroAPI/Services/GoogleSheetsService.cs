@@ -1130,6 +1130,66 @@ public class GoogleSheetsService
         return result;
     }
 
+    public async Task<HashSet<string>> GetComprasAsync(string pessoaFiltro)
+    {
+        var request = _service.Spreadsheets.Values.Get(
+            SpreadsheetId,
+            $"{SheetName}!A:J");
+
+        var response = await request.ExecuteAsync();
+        var values = response.Values;
+
+        var result = new HashSet<string>();
+
+        if (values == null || values.Count <= 1)
+            return result;
+
+        var pessoaFiltroNorm = pessoaFiltro.Trim().ToUpperInvariant();
+
+        // pula cabeçalho
+        for (int i = 1; i < values.Count; i++)
+        {
+            var row = values[i];
+
+            // Colunas conforme sua planilha:
+            // E = Valor  -> index 4
+            // G = Data   -> index 6
+            // H = Pessoa -> index 7
+
+            var valorStr = row.Count > 4 ? row[4]?.ToString() : null;
+            var dataStr = row.Count > 6 ? row[6]?.ToString() : null;
+            var pessoa = row.Count > 7 ? row[7]?.ToString() : null;
+
+            if (string.IsNullOrWhiteSpace(valorStr) ||
+                string.IsNullOrWhiteSpace(dataStr) ||
+                string.IsNullOrWhiteSpace(pessoa))
+                continue;
+
+            // 👉 filtra pela pessoa já aqui
+            if (!pessoa.Trim().ToUpperInvariant().Equals(pessoaFiltroNorm))
+                continue;
+
+            if (!DateTime.TryParse(dataStr, out var data))
+                continue;
+
+            if (!decimal.TryParse(
+                    valorStr,
+                    System.Globalization.NumberStyles.Any,
+                    new System.Globalization.CultureInfo("pt-BR"),
+                    out var valor))
+                continue;
+
+            var chave =
+                $"{pessoa.Trim().ToUpperInvariant()}|" +
+                $"{data:yyyy-MM-dd}|" +
+                $"{valor.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+
+            result.Add(chave);
+        }
+
+        return result;
+    }
+
     internal class CartaoTipoResumo
     {
         public string? Cartao { get; set; }

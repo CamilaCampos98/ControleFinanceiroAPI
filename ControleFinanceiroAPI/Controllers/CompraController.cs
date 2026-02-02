@@ -654,7 +654,20 @@ namespace ControleFinanceiroAPI.Controllers
                 return StatusCode(500, $"Erro ao buscar cartões: {ex.Message}");
             }
         }
+
+
         #endregion
+
+        [HttpGet("GetCompras")]
+        public async Task<IActionResult> GetCompras([FromQuery] string pessoa)
+        {
+            if (string.IsNullOrWhiteSpace(pessoa))
+                return BadRequest("Pessoa é obrigatória.");
+
+            var chaves = await _googleSheetsService.GetComprasAsync(pessoa);
+
+            return Ok(chaves);
+        }
 
 
     }
