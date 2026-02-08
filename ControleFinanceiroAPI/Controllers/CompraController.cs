@@ -3,6 +3,7 @@ using Google.Apis.Sheets.v4;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using static GoogleSheetsService;
 
 namespace ControleFinanceiroAPI.Controllers
@@ -42,17 +43,6 @@ namespace ControleFinanceiroAPI.Controllers
 
             if (!DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoDate))
                 return BadRequest("mesAno inválido. Formato esperado: MM/yyyy (ex: 05/2025).");
-
-            // Obter ciclos de fatura do banco, planilha ou configuração
-            // Exemplo de ciclos fixos para demonstração
-            //var ciclosFatura = new List<CicloFatura>
-            //                    {
-            //                        new CicloFatura { Cartao = "ITAU", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 8), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 15) },
-            //                        new CicloFatura { Cartao = "SANTANDER", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 8), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 16) },
-            //                        new CicloFatura { Cartao = "BRADESCO", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 3), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 15) },
-            //                        new CicloFatura { Cartao = "C&A", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 5), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 20) },
-            //                        new CicloFatura { Cartao = "RIACHUELO", Mes = mesAnoDate.Month, Ano = mesAnoDate.Year, Fechamento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 10), Vencimento = new DateTime(mesAnoDate.Year, mesAnoDate.Month, 18) }
-            //                    };
 
             var (success, message, data) = _googleSheetsService.GetResumoPorPessoaEPeriodo(pessoa, mesAno);
 
@@ -126,7 +116,6 @@ namespace ControleFinanceiroAPI.Controllers
                 return StatusCode(500, $"Erro ao acessar a planilha: {ex.Message}");
             }
         }
-
         [HttpPost("RegistrarCompra")]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
@@ -135,35 +124,37 @@ namespace ControleFinanceiroAPI.Controllers
                 if (compra == null)
                     return BadRequest();
 
-                var dataToWrite = new List<object>
-                            {
-                                compra.FormaPgto,
-                                compra.TotalParcelas,
-                                compra.Descricao,
-                                compra.ValorTotal,
-                                compra.Data.ToString("yyyy-MM-dd")
-                            };
+                // 👉 calcula o mês da fatura a partir da data da compra
+                var mesFatura = _googleSheetsService.CalcularMesFatura(
+                    compra.Data,
+                    compra.Cartao,
+                    compra.Pessoa
+                );
 
-                // Verifica se a pessoa tem entrada no mês
-                var temEntrada = _googleSheetsService.PessoaTemEntradaCadastrada(compra.Pessoa, compra.Data);
+                // guarda no model (mesmo campo usado no CSV / controle)
+                compra.MesAno = mesFatura;
+
+                // 👉 agora valida a entrada usando o MÊS DA FATURA
+                var temEntrada = _googleSheetsService
+                    .PessoaTemEntradaCadastrada(compra.Pessoa, mesFatura);
 
                 if (!temEntrada)
                 {
-                    return BadRequest($"A pessoa {compra.Pessoa} não possui entrada cadastrada no mês {compra.Data.ToString("MM/yyyy")}.");
+                    return BadRequest(
+                        $"A pessoa {compra.Pessoa} não possui entrada cadastrada no mês {mesFatura}."
+                    );
                 }
 
                 _googleSheetsService.WritePurchaseWithInstallments(compra);
-                return Ok(new { id = compra.idLan, message = "Compra registrada com sucesso" });
 
+                return Ok(new { id = compra.idLan, message = "Compra registrada com sucesso" });
             }
             catch (Exception ex)
             {
-
                 Console.WriteLine($"Erro no endpoint RegistrarCompra: {ex.Message}");
                 Console.WriteLine(ex.StackTrace);
                 return StatusCode(500, $"Erro interno: {ex.Message}");
             }
-
         }
 
         [HttpPost("RegistrarEntrada")]
@@ -669,7 +660,121 @@ namespace ControleFinanceiroAPI.Controllers
             return Ok(chaves);
         }
 
+        [HttpGet("PeriodoFatura")]
+        public IActionResult GetPeriodoFatura(
+       [FromQuery] string pessoa,
+       [FromQuery] string mesAno,
+       [FromQuery] string cartao)
+        {
+            var configData = _googleSheetsService.ReadData("Config!A1:L");
 
+            var fechamentoCartoes = configData
+                .Skip(1)
+                .Where(r =>
+                    !string.IsNullOrWhiteSpace(r[0]?.ToString()) &&
+                    !string.IsNullOrWhiteSpace(r[3]?.ToString()))
+                .ToDictionary(
+                    r => $"{r[0].ToString().Trim().ToUpper()}|{r[3].ToString().Trim()}",
+                    r =>
+                    {
+                        var d = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                        if (int.TryParse(r[6]?.ToString(), out var itau))
+                            d["ITAU"] = itau;
+
+                        if (int.TryParse(r[7]?.ToString(), out var bradesco))
+                            d["BRADESCO"] = bradesco;
+
+                        if (int.TryParse(r[8]?.ToString(), out var santander))
+                            d["SANTANDER"] = santander;
+
+                        if (int.TryParse(r[9]?.ToString(), out var riachuelo))
+                            d["RIACHUELO"] = riachuelo;
+
+                        if (int.TryParse(r[10]?.ToString(), out var cea))
+                            d["C&A"] = cea;
+
+                        if (int.TryParse(r[11]?.ToString(), out var outros))
+                            d["OUTROS"] = outros;
+
+                        return d;
+                    });
+
+            // ----------------------------
+            // fallback de mês
+            // ----------------------------
+
+            var pessoaKey = pessoa.Trim().ToUpper();
+
+            if (!DateTime.TryParseExact(
+                    mesAno,
+                    "MM/yyyy",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var mesRef))
+            {
+                return BadRequest("mesAno inválido. Formato esperado MM/yyyy.");
+            }
+
+            Dictionary<string, int> fechamentosDoMes = null;
+            string mesUsadoNoFechamento = null;
+
+            for (int i = 0; i < 24; i++)
+            {
+                var chave = $"{pessoaKey}|{mesRef:MM/yyyy}";
+
+                if (fechamentoCartoes.TryGetValue(chave, out fechamentosDoMes))
+                {
+                    mesUsadoNoFechamento = mesRef.ToString("MM/yyyy");
+                    break;
+                }
+
+                mesRef = mesRef.AddMonths(-1);
+            }
+
+            if (fechamentosDoMes == null)
+                return BadRequest(
+                    $"Não existe fechamento configurado para {pessoa} até {mesAno}."
+                );
+
+            // ⚠️ repare:
+            // o período continua sendo calculado para o mesAno solicitado,
+            // o fallback é só para descobrir os dias de fechamento
+
+            var (inicio, fim) = _googleSheetsService.ObterPeriodoCartao(configData,
+                    cartao,
+                    mesUsadoNoFechamento,
+                    pessoa
+                );
+
+            return Ok(new
+            {
+                Inicio = inicio,
+                Fim = fim,
+                Fechamentos = fechamentosDoMes
+            });
+        }
+
+        private static string RemoverPalavras(string texto)
+        {
+            if (string.IsNullOrEmpty(texto))
+                return texto;
+
+            var palavrasParaRemover = new[] { "Titular", "Adicional" };
+
+            foreach (var palavra in palavrasParaRemover)
+            {
+                texto = Regex.Replace(
+                    texto,
+                    Regex.Escape(palavra),
+                    "",
+                    RegexOptions.IgnoreCase);
+            }
+
+            return texto.Trim();
+        }
     }
+
 }
+
 

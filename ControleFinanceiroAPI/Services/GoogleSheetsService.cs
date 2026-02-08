@@ -13,14 +13,25 @@ public class GoogleSheetsService
     static readonly string[] Scopes = { SheetsService.Scope.Spreadsheets };
     static readonly string ApplicationName = "ControleFinanceiro";
 
+    //LOCAL, 1FHpsx0d2ZJYo4lNBCKK52rPwRd1UKmpzjYhiTTehCYw
+    //PROD, 16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM
+#if DEBUG
+    private readonly string SpreadsheetId = "1FHpsx0d2ZJYo4lNBCKK52rPwRd1UKmpzjYhiTTehCYw";
+#else
     private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM";
+#endif
+
     private readonly string SheetName = "Controle";
     private readonly string rangeFixo = "Fixos!A:H";
     private readonly string CartoesSheet = "Cartoes";
     private readonly string FixosTipoSheet = "TiposFixos";
 
     private readonly SheetsService _service;
+    private int? _ultimoIdLanCache;
+    private readonly object _lockId = new();
 
+    private IList<IList<object>>? _cacheConfigPeriodo;
+    private readonly object _lockConfigPeriodo = new();
     public GoogleSheetsService()
     {
         var credential = GetGoogleCredential().CreateScoped(Scopes);
@@ -70,64 +81,79 @@ public class GoogleSheetsService
 
     public void WritePurchaseWithInstallments(CompraModel compra)
     {
-        var idLan = ObterProximoIdLan();
-        compra.idLan = idLan;
-
-        // Tratamento da Fonte
-        compra.Fonte = string.IsNullOrWhiteSpace(compra.Fonte) || compra.Fonte == "string"
-            ? "Salário"
-            : compra.Fonte.Trim();
-
-        // Tratamento da Forma de Pagamento
-        if (!string.IsNullOrWhiteSpace(compra.FormaPgto))
+        try
         {
-            var forma = compra.FormaPgto.Trim().ToUpper();
-            if (forma == "D")
-                compra.FormaPgto = "Débito";
-            else if (forma == "C")
-                compra.FormaPgto = "Crédito";
+            var idLan = ObterProximoIdLan();
+            compra.idLan = idLan;
+
+            // Tratamento da Fonte
+            compra.Fonte = string.IsNullOrWhiteSpace(compra.Fonte) || compra.Fonte == "string"
+                ? "Salário"
+                : compra.Fonte.Trim();
+
+            // Tratamento da Forma de Pagamento
+            if (!string.IsNullOrWhiteSpace(compra.FormaPgto))
+            {
+                var forma = compra.FormaPgto.Trim().ToUpper();
+                if (forma == "D")
+                    compra.FormaPgto = "Débito";
+                else if (forma == "C")
+                    compra.FormaPgto = "Crédito";
+                else
+                    compra.FormaPgto = forma; // Mantém o que veio, se não for D ou C
+            }
             else
-                compra.FormaPgto = forma; // Mantém o que veio, se não for D ou C
-        }
-        else
-        {
-            compra.FormaPgto = "Débito"; // Ou outro default se quiser
-        }
-        var linhas = new List<IList<object>>();
-        var valorParcela = compra.ValorTotal / compra.TotalParcelas;
+            {
+                compra.FormaPgto = "Débito"; // Ou outro default se quiser
+            }
+            var linhas = new List<IList<object>>();
+            var valorParcela = compra.ValorTotal / compra.TotalParcelas;
 
-        for (int i = 1; i <= compra.TotalParcelas; i++)
-        {
-            var dataParcela = compra.Data.AddMonths(i - 1);
-            var parcelaStr = compra.TotalParcelas > 1 ? $"{i}/{compra.TotalParcelas}" : "";
+            for (int i = 1; i <= compra.TotalParcelas; i++)
+            {
+                var dataParcela = compra.Data.AddMonths(i - 1);
+                var parcelaStr = compra.TotalParcelas > 1 ? $"{i}/{compra.TotalParcelas}" : "";
 
-            linhas.Add(new List<object> {
+                var mesFaturaParcela = CalcularMesFatura(
+                                                        dataParcela,
+                                                        compra.Cartao,
+                                                        compra.Pessoa
+                                                    );
+
+                linhas.Add(new List<object> {
                         compra.idLan,
                         compra.FormaPgto,
                         parcelaStr,
                         compra.Descricao,
                         valorParcela,
-                        dataParcela.ToString("MM/yyyy"),
+                        mesFaturaParcela,
                         dataParcela.ToString("yyyy-MM-dd"),
                         compra.Pessoa,
                         compra.Fonte,
                         compra.Cartao
                     });
+            }
+
+            var valueRange = new ValueRange { Values = linhas };
+
+            var appendRequest = _service.Spreadsheets.Values.Append(
+                valueRange,
+                SpreadsheetId,
+                $"{SheetName}"
+            );
+            appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
+
+            var response = appendRequest.Execute();
+
+            // Opcional: log para confirmar inserção
+            Console.WriteLine("Linhas inseridas: " + response.Updates.UpdatedRows);
+        }
+        catch (Exception ex)
+        {
+
+            throw new InvalidOperationException(ex.Message);
         }
 
-        var valueRange = new ValueRange { Values = linhas };
-
-        var appendRequest = _service.Spreadsheets.Values.Append(
-            valueRange,
-            SpreadsheetId,
-            $"{SheetName}"
-        );
-        appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
-
-        var response = appendRequest.Execute();
-
-        // Opcional: log para confirmar inserção
-        Console.WriteLine("Linhas inseridas: " + response.Updates.UpdatedRows);
     }
 
 
@@ -140,25 +166,35 @@ public class GoogleSheetsService
 
     public int ObterProximoIdLan()
     {
-        var range = $"{SheetName}!A:A"; // Supondo que idLan está na coluna A
-        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
-        var response = request.Execute();
+        lock (_lockId)
+        {
+            if (_ultimoIdLanCache == null)
+            {
+                var range = $"{SheetName}!A:A";
+                var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
+                var response = request.Execute();
 
-        var valores = response.Values;
+                var valores = response.Values;
 
-        if (valores == null || valores.Count == 0)
-            return 1; // Se não tem nenhum, começa com 1
+                if (valores == null || valores.Count <= 1)
+                {
+                    _ultimoIdLanCache = 1;
+                    return 1;
+                }
 
-        // Pular o cabeçalho se houver
-        var idList = valores.Skip(1) // remove cabeçalho, se não tiver, tira esse skip
-                             .Select(l => int.TryParse(l.FirstOrDefault()?.ToString(), out var id) ? id : 0)
-                             .Where(id => id > 0)
-                             .ToList();
+                var idList = valores
+                    .Skip(1)
+                    .Select(l => int.TryParse(l.FirstOrDefault()?.ToString(), out var id) ? id : 0)
+                    .Where(id => id > 0);
 
-        if (!idList.Any())
-            return 1;
+                _ultimoIdLanCache = idList.Any() ? idList.Max() + 1 : 1;
 
-        return idList.Max() + 1;
+                return _ultimoIdLanCache.Value;
+            }
+
+            _ultimoIdLanCache++;
+            return _ultimoIdLanCache.Value;
+        }
     }
 
 
@@ -204,7 +240,7 @@ public class GoogleSheetsService
                             Pessoa = pessoa,
                             MesAno = mesAnoStr,
                             SaldoRestante = resumo.Data.SaldoRestante,
-                            ValorGuardado = resumo.Data.ValorGuardado 
+                            ValorGuardado = resumo.Data.ValorGuardado
                         });
                     }
                 }
@@ -314,45 +350,45 @@ public class GoogleSheetsService
                     var conteudoLinha = string.Join(", ", row.Select(c => c?.ToString() ?? ""));
                     throw new Exception($"Erro ao processar Lista Controle - Linha {linha}: {conteudoLinha}. Detalhe: {ex.Message}", ex);
                 }
-                
+
             }
 
 
-            // Fechamento fixo por cartão
-            var fechamentoCartoes = new Dictionary<string, int>
-        {
-            { "ITAU", 8 },
-            { "SANTANDER", 9 },
-            { "BRADESCO", 3 },
-            { "C&A", 5 },
-            { "RIACHUELO", 10 }
-        };
+            //    // Fechamento fixo por cartão
+            //    var fechamentoCartoes = new Dictionary<string, int>
+            //{
+            //    { "ITAU", 8 },
+            //    { "SANTANDER", 9 },
+            //    { "BRADESCO", 3 },
+            //    { "C&A", 5 },
+            //    { "RIACHUELO", 10 }
+            //};
 
             // Mes/Ano
             if (!DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime mesAnoDate))
                 throw new Exception("mesAno inválido. Formato esperado: MM/yyyy (ex: 05/2025).");
 
-            // Função para calcular período da fatura
-            (DateTime inicio, DateTime fim) ObterPeriodoCartao(string cartaoBase)
-            {
-                cartaoBase = RemoverPalavras(cartaoBase?.ToUpper() ?? "");
-                if (!fechamentoCartoes.ContainsKey(cartaoBase))
-                    cartaoBase = "OUTROS"; // default
-                int diaFechamento = fechamentoCartoes.ContainsKey(cartaoBase) ? fechamentoCartoes[cartaoBase] : 1;
+            //// Função para calcular período da fatura
+            //(DateTime inicio, DateTime fim) ObterPeriodoCartao(string cartaoBase)
+            //{
+            //    cartaoBase = RemoverPalavras(cartaoBase?.ToUpper() ?? "");
+            //    if (!fechamentoCartoes.ContainsKey(cartaoBase))
+            //        cartaoBase = "OUTROS"; // default
+            //    int diaFechamento = fechamentoCartoes.ContainsKey(cartaoBase) ? fechamentoCartoes[cartaoBase] : 1;
 
-                // Início: dia seguinte ao fechamento no mês atual
-                int diasNoMesAtual = DateTime.DaysInMonth(mesAnoDate.Year, mesAnoDate.Month);
-                int diaInicio = Math.Min(diaFechamento, diasNoMesAtual);
-                DateTime inicio = new DateTime(mesAnoDate.Year, mesAnoDate.Month, diaInicio).AddDays(1);
+            //    // Início: dia seguinte ao fechamento no mês atual
+            //    int diasNoMesAtual = DateTime.DaysInMonth(mesAnoDate.Year, mesAnoDate.Month);
+            //    int diaInicio = Math.Min(diaFechamento, diasNoMesAtual);
+            //    DateTime inicio = new DateTime(mesAnoDate.Year, mesAnoDate.Month, diaInicio).AddDays(1);
 
-                // Fim: dia do fechamento no mês seguinte
-                DateTime mesSeguinte = mesAnoDate.AddMonths(1);
-                int diasNoMesSeguinte = DateTime.DaysInMonth(mesSeguinte.Year, mesSeguinte.Month);
-                int diaFim = Math.Min(diaFechamento, diasNoMesSeguinte);
-                DateTime fim = new DateTime(mesSeguinte.Year, mesSeguinte.Month, diaFim);
+            //    // Fim: dia do fechamento no mês seguinte
+            //    DateTime mesSeguinte = mesAnoDate.AddMonths(1);
+            //    int diasNoMesSeguinte = DateTime.DaysInMonth(mesSeguinte.Year, mesSeguinte.Month);
+            //    int diaFim = Math.Min(diaFechamento, diasNoMesSeguinte);
+            //    DateTime fim = new DateTime(mesSeguinte.Year, mesSeguinte.Month, diaFim);
 
-                return (inicio, fim);
-            }
+            //    return (inicio, fim);
+            //}
 
             // Salário e extras
             var dadosConfig = configs
@@ -369,15 +405,12 @@ public class GoogleSheetsService
 
             // Compras da pessoa no período
             var controlePessoa = controle
-                .Where(c =>
-                {
-                    if (!c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase))
-                        return false;
+                                    .Where(c =>
+                                        c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase)
+                                        && c.mesAno == mesAno
+                                    )
+                                    .ToList();
 
-                    var (inicio, fim) = ObterPeriodoCartao(c.Cartao);
-                    return c.Data.Date >= inicio && c.Data.Date <= fim;
-                })
-                .ToList();
 
             decimal totalGastoControle = controlePessoa.Sum(c => (decimal)c.Valor);
 
@@ -419,7 +452,7 @@ public class GoogleSheetsService
                 throw new Exception("mesAno inválido. Formato esperado: MM/yyyy (ex: 05/2025).");
 
             // Ler dados das planilhas
-            var configData = ReadData("Config!A1:F");
+            var configData = ReadData("Config!A1:L");
             var fixosData = ReadData("Fixos!A1:H");
             var controleData = ReadData("Controle!A1:J");
 
@@ -462,39 +495,86 @@ public class GoogleSheetsService
                 Cartao = row[9].ToString()
             }).ToList();
 
-            // Fechamento fixo por cartão
-            var fechamentoCartoes = new Dictionary<string, int>
-        {
-            { "ITAU", 8 },
-            { "SANTANDER", 9 },
-            { "BRADESCO", 3 },
-            { "C&A", 5 },
-            { "RIACHUELO", 10 },
-            { "OUTROS", 1 }
-        };
+
+            var fechamentoCartoes = configData
+                                        .Skip(1)
+                                        .Where(r =>
+                                            !string.IsNullOrWhiteSpace(r[0]?.ToString()) &&   // Pessoa
+                                            !string.IsNullOrWhiteSpace(r[3]?.ToString())      // MesAno
+                                        )
+                                        .ToDictionary(
+                                            r => $"{r[0].ToString().Trim().ToUpper()}|{r[3].ToString().Trim()}",
+                                            r =>
+                                            {
+                                                var d = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                                                if (int.TryParse(r[6]?.ToString(), out var itau))
+                                                    d["ITAU"] = itau;
+
+                                                if (int.TryParse(r[7]?.ToString(), out var bradesco))
+                                                    d["BRADESCO"] = bradesco;
+
+                                                if (int.TryParse(r[8]?.ToString(), out var santander))
+                                                    d["SANTANDER"] = santander;
+
+                                                if (int.TryParse(r[9]?.ToString(), out var riachuelo))
+                                                    d["RIACHUELO"] = riachuelo;
+
+                                                if (int.TryParse(r[10]?.ToString(), out var cea))
+                                                    d["C&A"] = cea;
+
+                                                if (int.TryParse(r[10]?.ToString(), out var outros))
+                                                    d["OUTROS"] = outros;
+
+                                                return d;
+                                            }
+                                        );
+
 
             // Função para calcular período da fatura
-            (DateTime inicio, DateTime fim) ObterPeriodoCartao(string cartaoBase)
+            (DateTime inicio, DateTime fim) ObterPeriodoCartao(string cartaoBase, string mesAno, string pessoa)
             {
                 cartaoBase = RemoverPalavras(cartaoBase?.ToUpper() ?? "");
-                if (!fechamentoCartoes.ContainsKey(cartaoBase))
-                    cartaoBase = "OUTROS";
 
-                int diaFechamento = fechamentoCartoes[cartaoBase];
+                var chave = $"{pessoa.Trim().ToUpper()}|{mesAno.Trim()}";
 
-                // Início: dia seguinte ao fechamento no mês informado
+                if (!fechamentoCartoes.TryGetValue(chave, out var fechamentosDoMes))
+                    throw new Exception($"Não existe fechamento configurado para {pessoa} em {mesAno}");
+
+                if (!fechamentosDoMes.TryGetValue(cartaoBase, out var diaFechamento))
+                    throw new Exception($"Não existe fechamento do cartão {cartaoBase} para {pessoa} em {mesAno}");
+
+                var mesAnoDate = DateTime.ParseExact(
+                    mesAno,
+                    "MM/yyyy",
+                    CultureInfo.InvariantCulture
+                );
+
+                // --------- DAQUI PRA BAIXO É IDÊNTICO AO SEU CÓDIGO ANTIGO ---------
+
                 int diasMesAtual = DateTime.DaysInMonth(mesAnoDate.Year, mesAnoDate.Month);
                 int diaInicio = Math.Min(diaFechamento, diasMesAtual);
-                DateTime inicio = new DateTime(mesAnoDate.Year, mesAnoDate.Month, diaInicio).AddDays(1);
 
-                // Fim: dia do fechamento no mês seguinte
+                DateTime inicio = new DateTime(
+                    mesAnoDate.Year,
+                    mesAnoDate.Month,
+                    diaInicio
+                ).AddDays(1);
+
                 DateTime mesSeguinte = mesAnoDate.AddMonths(1);
+
                 int diasMesSeguinte = DateTime.DaysInMonth(mesSeguinte.Year, mesSeguinte.Month);
                 int diaFim = Math.Min(diaFechamento, diasMesSeguinte);
-                DateTime fim = new DateTime(mesSeguinte.Year, mesSeguinte.Month, diaFim);
+
+                DateTime fim = new DateTime(
+                    mesSeguinte.Year,
+                    mesSeguinte.Month,
+                    diaFim
+                );
 
                 return (inicio, fim);
             }
+
 
             // ----------------------------
             // FILTRAGENS
@@ -514,55 +594,50 @@ public class GoogleSheetsService
                 .Sum(f => f.Valor);
 
             var controlePessoa = controle
-                                        .Where(c =>
-                                        {
-                                            if (!c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase)) return false;
-
-                                            var (inicio, fim) = ObterPeriodoCartao(c.Cartao);
-                                            return c.Data.Date >= inicio && c.Data.Date <= fim;
-                                        })
-                                        .ToList();
+                                 .Where(c =>
+                                     c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase)
+                                     && c.mesAno == mesAno
+                                 )
+                                 .ToList();
 
             var gastosPorCartaoDict = controlePessoa
                 .GroupBy(c => string.IsNullOrEmpty(c.Cartao) ? "Outros" : c.Cartao)
                 .ToDictionary(g => g.Key, g => g.Sum(x => x.Valor));
 
-            var resumoPorCartaoTipo = controle
-    .Where(c =>
-    {
-        var cartaoBase = RemoverPalavras(c.Cartao ?? "").ToUpper();
-        var (inicio, fim) = ObterPeriodoCartao(cartaoBase);
+            var resumoPorCartaoTipo =
+                                    controle
+                                        .Where(c =>
+                                            c.mesAno == mesAno &&
+                                            !string.IsNullOrEmpty(c.Cartao) &&
+                                            (
+                                                // cartões que são pessoais
+                                                RemoverPalavras(c.Cartao).Equals("BRADESCO", StringComparison.OrdinalIgnoreCase)
+                                                || RemoverPalavras(c.Cartao).Equals("C&A", StringComparison.OrdinalIgnoreCase)
+                                                || RemoverPalavras(c.Cartao).Equals("RIACHUELO", StringComparison.OrdinalIgnoreCase)
+                                                    ? c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase)
+                                                    : true
+                                            )
+                                        )
+                                        .GroupBy(c =>
+                                        {
+                                            var cartaoBase = RemoverPalavras(c.Cartao).ToUpper();
 
-        // Se for BRADESCO, C&A ou RIACHUELO → filtra por pessoa
-        if (cartaoBase == "BRADESCO" || cartaoBase == "C&A" || cartaoBase == "RIACHUELO")
-        {
-            return c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) &&
-                   c.Data.Date >= inicio && c.Data.Date <= fim &&
-                   !string.IsNullOrEmpty(c.Cartao);
-        }
+                                            var tipo =
+                                                c.Cartao.Contains("Adicional", StringComparison.OrdinalIgnoreCase)
+                                                    ? "Adicional"
+                                                    : c.Cartao.Contains("Titular", StringComparison.OrdinalIgnoreCase)
+                                                        ? "Titular"
+                                                        : "Outro";
 
-        // Senão, traz todos para separar Titular e Adicional
-        return c.Data.Date >= inicio && c.Data.Date <= fim &&
-               !string.IsNullOrEmpty(c.Cartao);
-    })
-    .GroupBy(c =>
-    {
-        var cartaoBase = RemoverPalavras(c.Cartao).ToUpper();
-        var tipo = c.Cartao.Contains("Adicional", StringComparison.OrdinalIgnoreCase)
-            ? "Adicional"
-            : c.Cartao.Contains("Titular", StringComparison.OrdinalIgnoreCase)
-                ? "Titular"
-                : "Outro";
-
-        return new { Cartao = cartaoBase, Tipo = tipo };
-                    })
-                    .Select(g => new CartaoTipoResumo
-                    {
-                        Cartao = g.Key.Cartao,
-                        Tipo = g.Key.Tipo,
-                        Valor = g.Sum(x => x.Valor)
-                    })
-                    .ToList();
+                                            return new { Cartao = cartaoBase, Tipo = tipo };
+                                        })
+                                        .Select(g => new CartaoTipoResumo
+                                        {
+                                            Cartao = g.Key.Cartao,
+                                            Tipo = g.Key.Tipo,
+                                            Valor = g.Sum(x => x.Valor)
+                                        })
+                                        .ToList();
 
             // ordem preferida dos cartões
             var preferredOrder = new[] { "ITAU", "SANTANDER", "RIACHUELO", "C&A", "BRADESCO" };
@@ -616,7 +691,7 @@ public class GoogleSheetsService
                 ResumoPorCartao = gastosPorCartaoDict,          // Total do cartão (geral)
                 ResumoPorCartaoTipo = resumoPorCartaoTipo
                                     .ToList()
-        };
+            };
 
             return (true, "Sucesso", resultado);
         }
@@ -625,26 +700,6 @@ public class GoogleSheetsService
             return (false, ex.Message, null);
         }
     }
-
-
-
-    public class CicloFatura
-    {
-        public string Cartao { get; set; }      // Nome do cartão, ex: ITAU
-        public int Mes { get; set; }            // Mês do ciclo
-        public int Ano { get; set; }            // Ano do ciclo
-        public DateTime Fechamento { get; set; } // Data de fechamento da fatura
-        public DateTime Vencimento { get; set; } // Data de vencimento da fatura
-    }
-
-    Dictionary<string, int> fechamentoCartoes = new()
-                                                {
-                                                    { "ITAU", 8 },
-                                                    { "SANTANDER", 9 },
-                                                    { "BRADESCO", 3 },
-                                                    { "C&A", 5 },
-                                                    { "RIACHUELO", 10 }
-                                                };
 
     public async Task DeletarLinhaPorIdAsync(string id, string nomeBase)
     {
@@ -719,7 +774,6 @@ public class GoogleSheetsService
 
         return (int)sheet.Properties.SheetId;
     }
-
 
     public int? ObterIndiceDaLinhaPorId(string idLan)
     {
@@ -846,11 +900,8 @@ public class GoogleSheetsService
         appendRequest.Execute();
     }
 
-    public bool PessoaTemEntradaCadastrada(string pessoa, DateTime dataCompra)
+    public bool PessoaTemEntradaCadastrada(string pessoa, string mesFatura)
     {
-        // Obter o mesAno baseado na dataCompra e na regra do dia 08
-        var mesAno = ObterMesAnoCompetencia(dataCompra);
-
         var range = "Config!A:D"; // A = Pessoa, D = MesAno
         var request = _service.Spreadsheets.Values.Get(SpreadsheetId, range);
         var response = request.Execute();
@@ -859,13 +910,13 @@ public class GoogleSheetsService
         if (valores == null || valores.Count <= 1)
             return false;
 
-        foreach (var linha in valores.Skip(1)) // 🔥 Pula o header
+        foreach (var linha in valores.Skip(1))
         {
             var pessoaPlanilha = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "";
             var mesAnoPlanilha = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "";
 
             if (string.Equals(pessoaPlanilha, pessoa, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(mesAnoPlanilha, mesAno, StringComparison.OrdinalIgnoreCase))
+                string.Equals(mesAnoPlanilha, mesFatura, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -873,6 +924,69 @@ public class GoogleSheetsService
 
         return false;
     }
+
+    private IList<IList<object>> ObterConfigPeriodo()
+    {
+        lock (_lockConfigPeriodo)
+        {
+            if (_cacheConfigPeriodo != null)
+                return _cacheConfigPeriodo;
+
+            var request = _service.Spreadsheets.Values.Get(SpreadsheetId, "Config!A1:L");
+            var response = request.Execute();
+
+            _cacheConfigPeriodo = response.Values ?? new List<IList<object>>();
+
+            return _cacheConfigPeriodo;
+        }
+    }
+    public string CalcularMesFatura(DateTime dataCompra, string cartao, string pessoa)
+    {
+        try
+        {
+            var configData = ObterConfigPeriodo();
+
+            var offsets = new[] { 0, -1, 1 };
+
+            foreach (var i in offsets)
+            {
+                var mesTeste = new DateTime(
+                    dataCompra.Year,
+                    dataCompra.Month,
+                    1
+                ).AddMonths(i);
+
+                var mesAno = mesTeste.ToString("MM/yyyy");
+
+                var (inicio, fim) = ObterPeriodoCartao(
+                    configData,
+                    cartao,
+                    mesAno,
+                    pessoa
+                );
+
+                var inicioComFechamento = inicio.AddDays(-1);
+
+                if (dataCompra.Date >= inicioComFechamento.Date &&
+                    dataCompra.Date <= fim.Date)
+                {
+                    return mesAno;
+                }
+            }
+
+            throw new Exception(
+                $"Não foi possível determinar a fatura da compra em {dataCompra:dd/MM/yyyy} para o cartão {cartao}."
+            );
+        }
+        catch (Exception ex)
+        {
+
+            throw new InvalidOperationException(ex.Message);
+        }
+
+    }
+
+
 
     /// <summary>
     /// Calcula o mes/ano da competência financeira, onde o mês vira no dia 08.
@@ -1164,6 +1278,117 @@ public class GoogleSheetsService
     }
 
     #endregion
+
+    public (DateTime inicio, DateTime fim) ObterPeriodoCartao(
+     IList<IList<object>> configData,
+     string cartaoBase,
+     string mesAno,
+     string pessoa)
+    {
+        var fechamentoCartoes = configData
+            .Skip(1)
+            .Where(r =>
+                !string.IsNullOrWhiteSpace(r[0]?.ToString()) &&
+                !string.IsNullOrWhiteSpace(r[3]?.ToString()))
+            .ToDictionary(
+                r => $"{r[0].ToString().Trim().ToUpper()}|{r[3].ToString().Trim()}",
+                r =>
+                {
+                    var d = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                    if (int.TryParse(r[6]?.ToString(), out var itau))
+                        d["ITAU"] = itau;
+
+                    if (int.TryParse(r[7]?.ToString(), out var bradesco))
+                        d["BRADESCO"] = bradesco;
+
+                    if (int.TryParse(r[8]?.ToString(), out var santander))
+                        d["SANTANDER"] = santander;
+
+                    if (int.TryParse(r[9]?.ToString(), out var riachuelo))
+                        d["RIACHUELO"] = riachuelo;
+
+                    if (int.TryParse(r[10]?.ToString(), out var cea))
+                        d["C&A"] = cea;
+
+                    if (int.TryParse(r[11]?.ToString(), out var outros))
+                        d["OUTROS"] = outros;
+
+                    return d;
+                });
+
+        cartaoBase = RemoverPalavras(cartaoBase?.ToUpper() ?? "");
+
+        var pessoaKey = pessoa.Trim().ToUpper();
+
+        var mesAnoDate = DateTime.ParseExact(
+            mesAno,
+            "MM/yyyy",
+            CultureInfo.InvariantCulture
+        );
+
+        Dictionary<string, int> fechamentosDoMes;
+
+        var chaveAtual = $"{pessoaKey}|{mesAno.Trim()}";
+
+        // ---------------------------------------
+        // se não existir fechamento no mês pedido,
+        // pega o último mês cadastrado da pessoa
+        // ---------------------------------------
+        if (!fechamentoCartoes.TryGetValue(chaveAtual, out fechamentosDoMes))
+        {
+            var ultimoMes = fechamentoCartoes
+                .Where(x => x.Key.StartsWith(pessoaKey + "|"))
+                .Select(x => new
+                {
+                    x.Key,
+                    Mes = DateTime.ParseExact(
+                        x.Key.Split('|')[1],
+                        "MM/yyyy",
+                        CultureInfo.InvariantCulture
+                    )
+                })
+                .OrderByDescending(x => x.Mes)
+                .FirstOrDefault();
+
+            if (ultimoMes == null)
+                throw new Exception($"Não existe fechamento configurado para {pessoa}");
+
+            fechamentosDoMes = fechamentoCartoes[ultimoMes.Key];
+        }
+
+        if (!fechamentosDoMes.TryGetValue(cartaoBase, out var diaFechamento))
+            throw new Exception($"Não existe fechamento do cartão {cartaoBase} para {pessoa}");
+
+        // ======================================================
+        // REGRA DA SUA FATURA:
+        // MM/yyyy = (fechamento + 1) do próprio mês
+        //            até fechamento do mês seguinte
+        // ======================================================
+
+        int diasMesAtual = DateTime.DaysInMonth(mesAnoDate.Year, mesAnoDate.Month);
+        int diaFechamentoMesAtual = Math.Min(diaFechamento, diasMesAtual);
+
+        DateTime inicio = new DateTime(
+            mesAnoDate.Year,
+            mesAnoDate.Month,
+            diaFechamentoMesAtual
+        ).AddDays(1); // só aqui soma 1 dia
+
+        var mesSeguinte = mesAnoDate.AddMonths(1);
+
+        int diasMesSeguinte = DateTime.DaysInMonth(mesSeguinte.Year, mesSeguinte.Month);
+        int diaFechamentoMesSeguinte = Math.Min(diaFechamento, diasMesSeguinte);
+
+        DateTime fim = new DateTime(
+            mesSeguinte.Year,
+            mesSeguinte.Month,
+            diaFechamentoMesSeguinte
+        );
+
+        return (inicio, fim);
+    }
+
 
     public async Task<List<UsuarioModel>> ObterUsuariosAsync()
     {
