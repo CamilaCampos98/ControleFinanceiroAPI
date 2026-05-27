@@ -1,4 +1,6 @@
 using System.Globalization;
+using ControleFinanceiroAPI.Options;
+using ControleFinanceiroAPI.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,28 +10,33 @@ builder.Configuration
     .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
 
-var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
-Console.WriteLine($"Listening on port: {port}");
 
-// Configure para escutar na porta correta
-builder.WebHost.UseUrls($"http://*:{port}");
 
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.Configure<GoogleSheetsOptions>(builder.Configuration.GetSection("GoogleSheets"));
 builder.Services.AddSingleton<GoogleSheetsService>();
+builder.Services.AddScoped<CompraWorkflowService>();
+builder.Services.AddScoped<EntradaWorkflowService>();
 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll",
         b => b.AllowAnyOrigin()
-              .AllowAnyMethod()
+                    .AllowAnyMethod()
               .AllowAnyHeader());
 });
 
 
 var app = builder.Build();
+
+if (!app.Environment.IsDevelopment())
+{
+    var port = Environment.GetEnvironmentVariable("PORT") ?? "10000";
+    builder.WebHost.UseUrls($"http://*:{port}");
+}
 
 var defaultCulture = new CultureInfo("pt-BR");
 CultureInfo.DefaultThreadCurrentCulture = defaultCulture;
@@ -37,10 +44,10 @@ CultureInfo.DefaultThreadCurrentUICulture = defaultCulture;
 
 app.UseCors("AllowAll");
 
-app.UseSwagger();
-app.UseSwaggerUI();
+    app.UseSwagger();
+    app.UseSwaggerUI();
 
-// app.UseHttpsRedirection();
+ app.UseHttpsRedirection();
 
 app.UseAuthorization();
 

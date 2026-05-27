@@ -1,5 +1,7 @@
 ﻿using ControleFinanceiroAPI.Models;
+using ControleFinanceiroAPI.Services;
 using Google.Apis.Sheets.v4;
+using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System.Globalization;
@@ -9,14 +11,22 @@ using static GoogleSheetsService;
 namespace ControleFinanceiroAPI.Controllers
 {
     [Route("api/[controller]")]
+    [EnableCors("AllowAll")]
     [ApiController]
     public class CompraController : ControllerBase
     {
         private readonly GoogleSheetsService _googleSheetsService;
+        private readonly CompraWorkflowService _compraWorkflowService;
+        private readonly EntradaWorkflowService _entradaWorkflowService;
         public string SheetName = "Controle";
-        public CompraController(GoogleSheetsService googleSheetsService)
+        public CompraController(
+            GoogleSheetsService googleSheetsService,
+            CompraWorkflowService compraWorkflowService,
+            EntradaWorkflowService entradaWorkflowService)
         {
             _googleSheetsService = googleSheetsService;
+            _compraWorkflowService = compraWorkflowService;
+            _entradaWorkflowService = entradaWorkflowService;
         }
 
         [HttpGet("Get")]
@@ -119,132 +129,16 @@ namespace ControleFinanceiroAPI.Controllers
         [HttpPost("RegistrarCompra")]
         public IActionResult CadastrarCompra([FromBody] CompraModel compra)
         {
-            try
-            {
-                if (compra == null)
-                    return BadRequest();
-
-                // 👉 calcula o mês da fatura a partir da data da compra
-                var mesFatura = _googleSheetsService.CalcularMesFatura(
-                    compra.Data,
-                    compra.Cartao,
-                    compra.Pessoa
-                );
-
-                // guarda no model (mesmo campo usado no CSV / controle)
-                compra.MesAno = mesFatura;
-
-                // 👉 agora valida a entrada usando o MÊS DA FATURA
-                var temEntrada = _googleSheetsService
-                    .PessoaTemEntradaCadastrada(compra.Pessoa, mesFatura);
-
-                if (!temEntrada)
-                {
-                    return BadRequest(
-                        $"A pessoa {compra.Pessoa} não possui entrada cadastrada no mês {mesFatura}."
-                    );
-                }
-
-                _googleSheetsService.WritePurchaseWithInstallments(compra);
-
-                return Ok(new { id = compra.idLan, message = "Compra registrada com sucesso" });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Erro no endpoint RegistrarCompra: {ex.Message}");
-                Console.WriteLine(ex.StackTrace);
-                return StatusCode(500, $"Erro interno: {ex.Message}");
-            }
+            var result = _compraWorkflowService.RegistrarCompra(compra);
+            return ToActionResult(result);
         }
-
         [HttpPost("RegistrarEntrada")]
         public IActionResult RegistrarEntrada([FromBody] EntradaModel entrada)
         {
-            try
-            {
-                if (entrada == null)
-                    return BadRequest("Dados inválidos");
-
-                decimal valorCalculado = 0m;
-
-                if (entrada.TipoEntrada != "Extra")
-                {
-                    // Cálculo padrão salário
-                    valorCalculado = entrada.ValorHora * entrada.HorasUteisMes;
-
-                    var linha = new List<object>
-                            {
-                                entrada.Pessoa,
-                                entrada.TipoEntrada,
-                                valorCalculado,
-                                entrada.MesAno,
-                                entrada.ValorHora,
-                                entrada.HorasExtras,
-                                "", // Extras fica vazio para salário
-                            };
-
-                    _googleSheetsService.WriteEntrada(linha);
-
-                    return Ok(new
-                    {
-                        message = "Entrada registrada com sucesso!",
-                        valorCalculado,
-                        entrada
-                    });
-                }
-                else if (entrada.TipoEntrada == "Extra")
-                {
-                    var entradaBase = _googleSheetsService.GetEntradaPorPessoaEMes(entrada.Pessoa, entrada.MesAno);
-
-                    if (entradaBase == null)
-                        return BadRequest("Entrada base (salário) não encontrada para a pessoa e mês.");
-
-                    var valorString = entradaBase["ValorHora"]
-                                    .Replace(".", "")
-                                    .Replace(",", ".");
-
-                    if (!decimal.TryParse(valorString, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal valorHoraExtra))
-                        return BadRequest("Valor da hora inválido na base.");
-
-                    // Calcular valor extra
-                    decimal valorExtraCalculado = valorHoraExtra * entrada.HorasExtras;
-
-                    // Pegar o valor extra atual para somar (coluna F)
-                    var valorExtraString = entradaBase["Extras"]
-                                    .Replace(".", "")
-                                    .Replace(",", ".");
-
-                    if (!decimal.TryParse(valorExtraString, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal extrasAtuais))
-                        return BadRequest("Valor da extra inválido na base.");
-
-                    decimal novosExtras = valorExtraCalculado;
-
-                    // Atualizar a coluna Extras na planilha
-                    _googleSheetsService.AtualizarExtrasEntrada(entrada.Pessoa, entrada.MesAno, novosExtras);
-
-                    return Ok(new
-                    {
-                        message = "Horas extras registradas com sucesso!",
-                        valorHoraExtra,
-                        horasExtras = entrada.HorasExtras,
-                        valorExtraCalculado,
-                        novosExtras
-                    });
-                }
-                else
-                {
-                    return BadRequest("Tipo de entrada inválido.");
-                }
-
-
-            }
-            catch (Exception ex)
-            {
-
-                return StatusCode(500, $"Erro interno: {ex.Message}");
-            }
-
+            var result = _entradaWorkflowService.RegistrarEntrada(entrada);
+            return ToActionResult(result);
         }
+
 
         [HttpPut("EditarCompra")]
         public IActionResult Editar([FromBody] EditarCompraRequest request)
@@ -437,7 +331,7 @@ namespace ControleFinanceiroAPI.Controllers
                 int proximoMes = dataDestino.Month == 12 ? 1 : dataDestino.Month + 1;
                 int anoVencimento = dataDestino.Month == 12 ? dataDestino.Year + 1 : dataDestino.Year;
 
-                string vencimento = new DateTime(anoVencimento, proximoMes, 10).ToString("yyyy-MM-dd");
+                string vencimento = new DateTime(anoVencimento, proximoMes, 15).ToString("yyyy-MM-dd");
 
                 IList<IList<object>> novasLinhas = fixosAnteriores.Select(l => (IList<object>)new List<object>
                                                     {
@@ -571,7 +465,7 @@ namespace ControleFinanceiroAPI.Controllers
                 Id = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + new Random().Next(1000, 9999),
                 Tipo = linha.Tipo,
                 MesAno = linha.MesAno,
-                Vencimento = linha.Vencimento = $"{DateTime.Today.Year}-{DateTime.Today.Month.ToString("D2")}-15",
+                Vencimento = linha.Vencimento,
                 Valor = request.ValorDividir,
                 Pago = linha.Pago,
                 Pessoa = request.NomeDestino,
@@ -754,7 +648,13 @@ namespace ControleFinanceiroAPI.Controllers
                 Fechamentos = fechamentosDoMes
             });
         }
+        private IActionResult ToActionResult(OperationResult result)
+        {
+            if (result.Success)
+                return Ok(result.Data);
 
+            return StatusCode(result.StatusCode, result.Message);
+        }
         private static string RemoverPalavras(string texto)
         {
             if (string.IsNullOrEmpty(texto))

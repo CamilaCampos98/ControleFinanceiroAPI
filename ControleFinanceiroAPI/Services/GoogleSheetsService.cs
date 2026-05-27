@@ -1,8 +1,10 @@
 ﻿using ControleFinanceiroAPI.Models;
+using ControleFinanceiroAPI.Options;
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Services;
 using Google.Apis.Sheets.v4;
 using Google.Apis.Sheets.v4.Data;
+using Microsoft.Extensions.Options;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -12,19 +14,11 @@ public class GoogleSheetsService
 {
     static readonly string[] Scopes = { SheetsService.Scope.Spreadsheets };
     static readonly string ApplicationName = "ControleFinanceiro";
-
-    //LOCAL, 1FHpsx0d2ZJYo4lNBCKK52rPwRd1UKmpzjYhiTTehCYw
-    //PROD, 16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM
-#if DEBUG
-    private readonly string SpreadsheetId = "1FHpsx0d2ZJYo4lNBCKK52rPwRd1UKmpzjYhiTTehCYw";
-#else
-    private readonly string SpreadsheetId = "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM";
-#endif
-
-    private readonly string SheetName = "Controle";
-    private readonly string rangeFixo = "Fixos!A:H";
-    private readonly string CartoesSheet = "Cartoes";
-    private readonly string FixosTipoSheet = "TiposFixos";
+    private readonly string SpreadsheetId;
+    private readonly string SheetName;
+    private readonly string rangeFixo;
+    private readonly string CartoesSheet;
+    private readonly string FixosTipoSheet;
 
     private readonly SheetsService _service;
     private int? _ultimoIdLanCache;
@@ -32,8 +26,24 @@ public class GoogleSheetsService
 
     private IList<IList<object>>? _cacheConfigPeriodo;
     private readonly object _lockConfigPeriodo = new();
-    public GoogleSheetsService()
+    public GoogleSheetsService(IOptions<GoogleSheetsOptions> options)
     {
+        var googleSheetsOptions = options.Value;
+
+        SpreadsheetId = ResolveSpreadsheetId(googleSheetsOptions);
+        SheetName = string.IsNullOrWhiteSpace(googleSheetsOptions.SheetName)
+            ? "Controle"
+            : googleSheetsOptions.SheetName;
+        rangeFixo = string.IsNullOrWhiteSpace(googleSheetsOptions.FixosRange)
+            ? "Fixos!A:H"
+            : googleSheetsOptions.FixosRange;
+        CartoesSheet = string.IsNullOrWhiteSpace(googleSheetsOptions.CartoesSheet)
+            ? "Cartoes"
+            : googleSheetsOptions.CartoesSheet;
+        FixosTipoSheet = string.IsNullOrWhiteSpace(googleSheetsOptions.FixosTipoSheet)
+            ? "TiposFixos"
+            : googleSheetsOptions.FixosTipoSheet;
+
         var credential = GetGoogleCredential().CreateScoped(Scopes);
 
         _service = new SheetsService(new BaseClientService.Initializer
@@ -43,10 +53,26 @@ public class GoogleSheetsService
         });
     }
 
+    private static string ResolveSpreadsheetId(GoogleSheetsOptions options)
+    {
+        var envSpreadsheetId = Environment.GetEnvironmentVariable("GOOGLE_SHEETS_SPREADSHEET_ID");
+        if (!string.IsNullOrWhiteSpace(envSpreadsheetId))
+            return envSpreadsheetId;
+
+        if (!string.IsNullOrWhiteSpace(options.SpreadsheetId))
+            return options.SpreadsheetId;
+
+#if DEBUG
+        return "1FHpsx0d2ZJYo4lNBCKK52rPwRd1UKmpzjYhiTTehCYw";
+#else
+        return "16c4P1KwZfuySZ36HSBKvzrl4ZagEXioD6yDhfQ9fhjM";
+#endif
+    }
+
     private static GoogleCredential GetGoogleCredential()
     {
         // Primeiro tenta pegar das variáveis de ambiente (Render ou outro servidor)
-        var credentialsJson = Environment.GetEnvironmentVariable("GOOGLE_CREDENTIALS");
+        var credentialsJson = Environment.GetEnvironmentVariable("GOOGLE_CREDENTIALS") ?? Environment.GetEnvironmentVariable("GOOGLE_SHEETS_CREDENTIALS_JSON");
 
         if (!string.IsNullOrEmpty(credentialsJson))
         {
@@ -1484,3 +1510,5 @@ public class GoogleSheetsService
         public string DescricaoUltimaCompra { get; set; } = "-";
     }
 }
+
+

@@ -1,24 +1,17 @@
-# Imagem base para build
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+ï»¿FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /app
 
-# Copia o csproj e restaura dependências
 COPY *.csproj ./
 RUN dotnet restore
 
-# Copia todo o código-fonte
 COPY . ./
-
-# Publica a aplicação na pasta 'out'
 RUN dotnet publish -c Release -o out
 
-
-# Imagem runtime
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 
-# Copia o output da publicação do build, incluindo credentials.json
 COPY --from=build /app/out .
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
 
-# Define o entrypoint para iniciar sua API
 ENTRYPOINT ["dotnet", "ControleFinanceiroAPI.dll"]
