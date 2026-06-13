@@ -5,6 +5,7 @@
         public int idLan { get; set; }
         public string FormaPgto { get; set; } = string.Empty;
         public int TotalParcelas { get; set; }
+        public int ParcelaInicial { get; set; } = 1;
         public string Descricao { get; set; } = string.Empty;
         public decimal ValorTotal { get; set; }
         public string? MesAno { get; set; }

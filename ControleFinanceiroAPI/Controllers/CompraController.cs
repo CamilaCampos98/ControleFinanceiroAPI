@@ -611,7 +611,6 @@ namespace ControleFinanceiroAPI.Controllers
             }
 
             Dictionary<string, int> fechamentosDoMes = null;
-            string mesUsadoNoFechamento = null;
 
             for (int i = 0; i < 24; i++)
             {
@@ -619,7 +618,6 @@ namespace ControleFinanceiroAPI.Controllers
 
                 if (fechamentoCartoes.TryGetValue(chave, out fechamentosDoMes))
                 {
-                    mesUsadoNoFechamento = mesRef.ToString("MM/yyyy");
                     break;
                 }
 
@@ -637,7 +635,7 @@ namespace ControleFinanceiroAPI.Controllers
 
             var (inicio, fim) = _googleSheetsService.ObterPeriodoCartao(configData,
                     cartao,
-                    mesUsadoNoFechamento,
+                    mesAno,
                     pessoa
                 );
 

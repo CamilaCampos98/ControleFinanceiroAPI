@@ -133,12 +133,16 @@ public class GoogleSheetsService
                 compra.FormaPgto = "Débito"; // Ou outro default se quiser
             }
             var linhas = new List<IList<object>>();
-            var valorParcela = compra.ValorTotal / compra.TotalParcelas;
+            var totalParcelas = compra.TotalParcelas <= 0 ? 1 : compra.TotalParcelas;
+            var parcelaInicial = Math.Clamp(compra.ParcelaInicial <= 0 ? 1 : compra.ParcelaInicial, 1, totalParcelas);
+            var quantidadeParcelasParaInserir = totalParcelas - parcelaInicial + 1;
+            var valorParcela = compra.ValorTotal / quantidadeParcelasParaInserir;
 
-            for (int i = 1; i <= compra.TotalParcelas; i++)
+            for (int i = 0; i < quantidadeParcelasParaInserir; i++)
             {
-                var dataParcela = compra.Data.AddMonths(i - 1);
-                var parcelaStr = compra.TotalParcelas > 1 ? $"{i}/{compra.TotalParcelas}" : "";
+                var numeroParcela = parcelaInicial + i;
+                var dataParcela = compra.Data.AddMonths(i);
+                var parcelaStr = totalParcelas > 1 ? $"{numeroParcela}/{totalParcelas}" : "";
 
                 var mesFaturaParcela = CalcularMesFatura(
                                                         dataParcela,
