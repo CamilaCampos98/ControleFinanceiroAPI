@@ -560,35 +560,49 @@ namespace ControleFinanceiroAPI.Controllers
        [FromQuery] string mesAno,
        [FromQuery] string cartao)
         {
+            if (string.IsNullOrWhiteSpace(pessoa) ||
+                string.IsNullOrWhiteSpace(mesAno) ||
+                string.IsNullOrWhiteSpace(cartao))
+            {
+                return BadRequest("Pessoa, mesAno e cartão são obrigatórios.");
+            }
+
             var configData = _googleSheetsService.ReadData("Config!A1:L");
 
             var fechamentoCartoes = configData
                 .Skip(1)
                 .Where(r =>
-                    !string.IsNullOrWhiteSpace(r[0]?.ToString()) &&
-                    !string.IsNullOrWhiteSpace(r[3]?.ToString()))
+                    !string.IsNullOrWhiteSpace(r.ElementAtOrDefault(0)?.ToString()) &&
+                    !string.IsNullOrWhiteSpace(r.ElementAtOrDefault(3)?.ToString()))
+                .Select(r => new
+                {
+                    Chave = $"{r.ElementAtOrDefault(0)?.ToString()?.Trim().ToUpperInvariant()}|{r.ElementAtOrDefault(3)?.ToString()?.Trim()}",
+                    Linha = r
+                })
+                .GroupBy(x => x.Chave, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(
-                    r => $"{r[0].ToString().Trim().ToUpper()}|{r[3].ToString().Trim()}",
-                    r =>
+                    grupo => grupo.Key,
+                    grupo =>
                     {
+                        var r = grupo.Last().Linha;
                         var d = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-                        if (int.TryParse(r[6]?.ToString(), out var itau))
+                        if (int.TryParse(r.ElementAtOrDefault(6)?.ToString(), out var itau))
                             d["ITAU"] = itau;
 
-                        if (int.TryParse(r[7]?.ToString(), out var bradesco))
+                        if (int.TryParse(r.ElementAtOrDefault(7)?.ToString(), out var bradesco))
                             d["BRADESCO"] = bradesco;
 
-                        if (int.TryParse(r[8]?.ToString(), out var santander))
+                        if (int.TryParse(r.ElementAtOrDefault(8)?.ToString(), out var santander))
                             d["SANTANDER"] = santander;
 
-                        if (int.TryParse(r[9]?.ToString(), out var riachuelo))
+                        if (int.TryParse(r.ElementAtOrDefault(9)?.ToString(), out var riachuelo))
                             d["RIACHUELO"] = riachuelo;
 
-                        if (int.TryParse(r[10]?.ToString(), out var cea))
+                        if (int.TryParse(r.ElementAtOrDefault(10)?.ToString(), out var cea))
                             d["C&A"] = cea;
 
-                        if (int.TryParse(r[11]?.ToString(), out var outros))
+                        if (int.TryParse(r.ElementAtOrDefault(11)?.ToString(), out var outros))
                             d["OUTROS"] = outros;
 
                         return d;

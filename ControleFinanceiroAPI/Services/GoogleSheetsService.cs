@@ -921,13 +921,74 @@ public class GoogleSheetsService
 
     public void WriteEntrada(List<object> entrada)
     {
-        var valueRange = new ValueRange { Values = new List<IList<object>> { entrada } };
+        var pessoa = entrada.ElementAtOrDefault(0)?.ToString()?.Trim() ?? string.Empty;
+        var mesAno = entrada.ElementAtOrDefault(3)?.ToString()?.Trim() ?? string.Empty;
+
+        var linhaCompleta = entrada.Take(6).ToList();
+        while (linhaCompleta.Count < 6)
+            linhaCompleta.Add(string.Empty);
+
+        var fechamentos = ObterFechamentosParaNovaEntrada(pessoa, mesAno);
+        linhaCompleta.AddRange(fechamentos);
+
+        var valueRange = new ValueRange { Values = new List<IList<object>> { linhaCompleta } };
 
         var appendRequest = _service.Spreadsheets.Values.Append(
-            valueRange, SpreadsheetId, "Config!A:F");
+            valueRange, SpreadsheetId, "Config!A:L");
 
         appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
         appendRequest.Execute();
+
+        lock (_lockConfigPeriodo)
+        {
+            _cacheConfigPeriodo = null;
+        }
+    }
+
+    private List<object> ObterFechamentosParaNovaEntrada(string pessoa, string mesAno)
+    {
+        var vazios = Enumerable.Repeat<object>(string.Empty, 6).ToList();
+        if (string.IsNullOrWhiteSpace(pessoa) ||
+            !DateTime.TryParseExact(mesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var periodoNovo))
+        {
+            return vazios;
+        }
+
+        var configuracoes = ReadData("Config!A1:L")
+            .Skip(1)
+            .Where(linha => string.Equals(
+                linha.ElementAtOrDefault(0)?.ToString()?.Trim(),
+                pessoa,
+                StringComparison.OrdinalIgnoreCase))
+            .Select(linha => new
+            {
+                Linha = linha,
+                PeriodoValido = DateTime.TryParseExact(
+                    linha.ElementAtOrDefault(3)?.ToString()?.Trim(),
+                    "MM/yyyy",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var periodo),
+                Periodo = periodo
+            })
+            .Where(x => x.PeriodoValido)
+            .ToList();
+
+        var origem = configuracoes
+            .Where(x => x.Periodo < periodoNovo)
+            .OrderByDescending(x => x.Periodo)
+            .FirstOrDefault()
+            ?? configuracoes
+                .OrderBy(x => Math.Abs((x.Periodo.Year - periodoNovo.Year) * 12 + x.Periodo.Month - periodoNovo.Month))
+                .FirstOrDefault();
+
+        if (origem == null)
+            return vazios;
+
+        return Enumerable.Range(6, 6)
+            .Select(indice => origem.Linha.ElementAtOrDefault(indice) ?? string.Empty)
+            .Cast<object>()
+            .ToList();
     }
 
     public bool PessoaTemEntradaCadastrada(string pessoa, string mesFatura)
