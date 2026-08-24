@@ -42,7 +42,8 @@ public sealed class CompraWorkflowService
             return OperationResult.Ok(new
             {
                 id = compra.idLan,
-                message = "Compra registrada com sucesso"
+                message = "Compra registrada com sucesso",
+                mesAno = compra.MesAno
             });
         }
         catch (Exception ex)
