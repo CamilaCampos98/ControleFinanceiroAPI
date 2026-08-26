@@ -143,12 +143,35 @@ namespace ControleFinanceiroAPI.Controllers
         [HttpPut("EditarCompra")]
         public IActionResult Editar([FromBody] EditarCompraRequest request)
         {
+            if (!request.Data.HasValue || string.IsNullOrWhiteSpace(request.Pessoa))
+                return BadRequest("Pessoa e data da compra são obrigatórias.");
+
+            try
+            {
+                var cartaoReferencia = string.IsNullOrWhiteSpace(request.Cartao)
+                    ? "ITAU"
+                    : request.Cartao;
+
+                request.MesAno = _googleSheetsService.CalcularMesFatura(
+                    request.Data.Value,
+                    cartaoReferencia,
+                    request.Pessoa);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest($"Não foi possível calcular a competência da compra: {ex.Message}");
+            }
+
             var sucesso = _googleSheetsService.EditarCompraNaPlanilha(request.IdLan, request);
 
             if (!sucesso)
                 return NotFound("Compra não encontrada.");
 
-            return Ok("Compra atualizada com sucesso.");
+            return Ok(new
+            {
+                message = "Compra atualizada com sucesso.",
+                mesAno = request.MesAno
+            });
         }
 
         [HttpGet("GetCartoes")]
