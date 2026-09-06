@@ -1,6 +1,8 @@
 using System.Globalization;
+using ControleFinanceiroAPI;
 using ControleFinanceiroAPI.Options;
 using ControleFinanceiroAPI.Services;
+using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,7 +17,15 @@ builder.Configuration
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Controle Financeiro API",
+        Version = ApplicationVersion.Current,
+        Description = $"Versão do aplicativo: {ApplicationVersion.Current}"
+    });
+});
 builder.Services.Configure<GoogleSheetsOptions>(builder.Configuration.GetSection("GoogleSheets"));
 builder.Services.AddSingleton<GoogleSheetsService>();
 builder.Services.AddScoped<CompraWorkflowService>();
@@ -44,10 +54,14 @@ CultureInfo.DefaultThreadCurrentUICulture = defaultCulture;
 
 app.UseCors("AllowAll");
 
-    app.UseSwagger();
-    app.UseSwaggerUI();
+app.UseSwagger();
+app.UseSwaggerUI(options =>
+{
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", $"Controle Financeiro API {ApplicationVersion.Current}");
+    options.DocumentTitle = $"Controle Financeiro API - {ApplicationVersion.Current}";
+});
 
- app.UseHttpsRedirection();
+app.UseHttpsRedirection();
 
 app.UseAuthorization();
 
