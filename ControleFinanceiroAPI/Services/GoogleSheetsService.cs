@@ -24,8 +24,6 @@ public class GoogleSheetsService
     private int? _ultimoIdLanCache;
     private readonly object _lockId = new();
 
-    private IList<IList<object>>? _cacheConfigPeriodo;
-    private readonly object _lockConfigPeriodo = new();
     public GoogleSheetsService(IOptions<GoogleSheetsOptions> options)
     {
         var googleSheetsOptions = options.Value;
@@ -939,10 +937,6 @@ public class GoogleSheetsService
         appendRequest.ValueInputOption = SpreadsheetsResource.ValuesResource.AppendRequest.ValueInputOptionEnum.USERENTERED;
         appendRequest.Execute();
 
-        lock (_lockConfigPeriodo)
-        {
-            _cacheConfigPeriodo = null;
-        }
     }
 
     private List<object> ObterFechamentosParaNovaEntrada(string pessoa, string mesAno)
@@ -1018,18 +1012,9 @@ public class GoogleSheetsService
 
     private IList<IList<object>> ObterConfigPeriodo()
     {
-        lock (_lockConfigPeriodo)
-        {
-            if (_cacheConfigPeriodo != null)
-                return _cacheConfigPeriodo;
-
-            var request = _service.Spreadsheets.Values.Get(SpreadsheetId, "Config!A1:L");
-            var response = request.Execute();
-
-            _cacheConfigPeriodo = response.Values ?? new List<IList<object>>();
-
-            return _cacheConfigPeriodo;
-        }
+        var request = _service.Spreadsheets.Values.Get(SpreadsheetId, "Config!A1:L");
+        var response = request.Execute();
+        return response.Values ?? new List<IList<object>>();
     }
     public string CalcularMesFatura(DateTime dataCompra, string cartao, string pessoa)
     {
@@ -1056,9 +1041,7 @@ public class GoogleSheetsService
                     pessoa
                 );
 
-                var inicioComFechamento = inicio.AddDays(-1);
-
-                if (dataCompra.Date >= inicioComFechamento.Date &&
+                if (dataCompra.Date >= inicio.Date &&
                     dataCompra.Date <= fim.Date)
                 {
                     return mesAno;
@@ -1376,79 +1359,95 @@ public class GoogleSheetsService
      string mesAno,
      string pessoa)
     {
+        if (string.IsNullOrWhiteSpace(pessoa))
+            throw new ArgumentException("Pessoa é obrigatória.", nameof(pessoa));
+
+        if (!DateTime.TryParseExact(
+                mesAno,
+                "MM/yyyy",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var mesAnoDate))
+        {
+            throw new ArgumentException("Mês/ano inválido. Use o formato MM/yyyy.", nameof(mesAno));
+        }
+
+        cartaoBase = RemoverPalavras(cartaoBase?.ToUpperInvariant() ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(cartaoBase))
+            throw new ArgumentException("Cartão é obrigatório.", nameof(cartaoBase));
+
         var fechamentoCartoes = configData
             .Skip(1)
             .Where(r =>
-                !string.IsNullOrWhiteSpace(r[0]?.ToString()) &&
-                !string.IsNullOrWhiteSpace(r[3]?.ToString()))
+                !string.IsNullOrWhiteSpace(r.ElementAtOrDefault(0)?.ToString()) &&
+                DateTime.TryParseExact(
+                    r.ElementAtOrDefault(3)?.ToString()?.Trim(),
+                    "MM/yyyy",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out _))
+            .Select(r => new
+            {
+                Chave = $"{r.ElementAtOrDefault(0)?.ToString()?.Trim().ToUpperInvariant()}|{r.ElementAtOrDefault(3)?.ToString()?.Trim()}",
+                Linha = r
+            })
+            .GroupBy(x => x.Chave, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
-                r => $"{r[0].ToString().Trim().ToUpper()}|{r[3].ToString().Trim()}",
-                r =>
+                grupo => grupo.Key,
+                grupo =>
                 {
                     var d = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    var colunas = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["ITAU"] = 6,
+                        ["BRADESCO"] = 7,
+                        ["SANTANDER"] = 8,
+                        ["RIACHUELO"] = 9,
+                        ["C&A"] = 10,
+                        ["OUTROS"] = 11
+                    };
 
-                    if (int.TryParse(r[6]?.ToString(), out var itau))
-                        d["ITAU"] = itau;
+                    foreach (var coluna in colunas)
+                    {
+                        var valor = grupo
+                            .Reverse()
+                            .Select(x => x.Linha.ElementAtOrDefault(coluna.Value)?.ToString())
+                            .FirstOrDefault(x => int.TryParse(x, out var dia) && dia is >= 1 and <= 31);
 
-                    if (int.TryParse(r[7]?.ToString(), out var bradesco))
-                        d["BRADESCO"] = bradesco;
-
-                    if (int.TryParse(r[8]?.ToString(), out var santander))
-                        d["SANTANDER"] = santander;
-
-                    if (int.TryParse(r[9]?.ToString(), out var riachuelo))
-                        d["RIACHUELO"] = riachuelo;
-
-                    if (int.TryParse(r[10]?.ToString(), out var cea))
-                        d["C&A"] = cea;
-
-                    if (int.TryParse(r[11]?.ToString(), out var outros))
-                        d["OUTROS"] = outros;
+                        if (int.TryParse(valor, out var diaFechamento))
+                            d[coluna.Key] = diaFechamento;
+                    }
 
                     return d;
-                });
+                },
+                StringComparer.OrdinalIgnoreCase);
 
-        cartaoBase = RemoverPalavras(cartaoBase?.ToUpper() ?? "");
-
-        var pessoaKey = pessoa.Trim().ToUpper();
-
-        var mesAnoDate = DateTime.ParseExact(
-            mesAno,
-            "MM/yyyy",
-            CultureInfo.InvariantCulture
-        );
-
-        Dictionary<string, int> fechamentosDoMes;
+        var pessoaKey = pessoa.Trim().ToUpperInvariant();
 
         var chaveAtual = $"{pessoaKey}|{mesAno.Trim()}";
+        var configuracoesDaPessoa = fechamentoCartoes
+            .Where(x => x.Key.StartsWith(pessoaKey + "|", StringComparison.OrdinalIgnoreCase))
+            .Select(x => new
+            {
+                x.Key,
+                x.Value,
+                Mes = DateTime.ParseExact(x.Key.Split('|')[1], "MM/yyyy", CultureInfo.InvariantCulture)
+            })
+            .Where(x => x.Value.ContainsKey(cartaoBase))
+            .ToList();
 
-        // ---------------------------------------
-        // se não existir fechamento no mês pedido,
-        // pega o último mês cadastrado da pessoa
-        // ---------------------------------------
-        if (!fechamentoCartoes.TryGetValue(chaveAtual, out fechamentosDoMes))
-        {
-            var ultimoMes = fechamentoCartoes
-                .Where(x => x.Key.StartsWith(pessoaKey + "|"))
-                .Select(x => new
-                {
-                    x.Key,
-                    Mes = DateTime.ParseExact(
-                        x.Key.Split('|')[1],
-                        "MM/yyyy",
-                        CultureInfo.InvariantCulture
-                    )
-                })
+        var configuracaoEscolhida = configuracoesDaPessoa
+            .FirstOrDefault(x => string.Equals(x.Key, chaveAtual, StringComparison.OrdinalIgnoreCase))
+            ?? configuracoesDaPessoa
+                .Where(x => x.Mes <= mesAnoDate)
                 .OrderByDescending(x => x.Mes)
+                .FirstOrDefault()
+            ?? configuracoesDaPessoa
+                .OrderBy(x => x.Mes)
                 .FirstOrDefault();
 
-            if (ultimoMes == null)
-                throw new Exception($"Não existe fechamento configurado para {pessoa}");
-
-            fechamentosDoMes = fechamentoCartoes[ultimoMes.Key];
-        }
-
-        if (!fechamentosDoMes.TryGetValue(cartaoBase, out var diaFechamento))
+        if (configuracaoEscolhida == null ||
+            !configuracaoEscolhida.Value.TryGetValue(cartaoBase, out var diaFechamento))
             throw new Exception($"Não existe fechamento do cartão {cartaoBase} para {pessoa}");
 
         // ======================================================

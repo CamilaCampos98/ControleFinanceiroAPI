@@ -18,13 +18,26 @@ public sealed class CompraWorkflowService
         if (compra == null)
             return OperationResult.BadRequest("Dados da compra não informados.");
 
+        string mesFatura;
         try
         {
-            var mesFatura = _googleSheetsService.CalcularMesFatura(
+            mesFatura = _googleSheetsService.CalcularMesFatura(
                 compra.Data,
                 compra.Cartao,
                 compra.Pessoa);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Não foi possível calcular a fatura da compra de {Pessoa} no cartão {Cartao}.",
+                compra.Pessoa,
+                compra.Cartao);
+            return OperationResult.BadRequest($"Não foi possível calcular o período do cartão: {ex.Message}");
+        }
 
+        try
+        {
             compra.MesAno = mesFatura;
 
             var temEntrada = _googleSheetsService.PessoaTemEntradaCadastrada(
