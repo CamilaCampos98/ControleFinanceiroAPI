@@ -619,6 +619,15 @@ public class GoogleSheetsService
             // Fixos da pessoa
             var fixosPessoa = fixos
                 .Where(f => f.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && f.mesAno == mesAno)
+                .ToList();
+
+            var valorGuardado = fixosPessoa
+                .Where(f => f.Tipo?.IndexOf("guardado", StringComparison.OrdinalIgnoreCase) >= 0)
+                .Sum(f => f.Valor);
+
+            var gastosFixosSemGuardado = fixosPessoa
+                .Where(f => string.IsNullOrWhiteSpace(f.Tipo) ||
+                            f.Tipo.IndexOf("guardado", StringComparison.OrdinalIgnoreCase) < 0)
                 .Sum(f => f.Valor);
 
             var controlePessoa = controle
@@ -691,7 +700,7 @@ public class GoogleSheetsService
             // ----------------------------
 
             var totalGastoPessoa = controlePessoa.Sum(c => c.Valor);
-            var saldoFinal = (salario + extra) - fixosPessoa - totalGastoPessoa;
+            var saldoFinal = (salario + extra) - gastosFixosSemGuardado - valorGuardado - totalGastoPessoa;
 
             var resultado = new
             {
@@ -699,7 +708,8 @@ public class GoogleSheetsService
                 Periodo = mesAno,
                 Salario = salario,
                 Extras = extra,
-                GastosFixos = fixosPessoa,
+                GastosFixos = gastosFixosSemGuardado,
+                ValorGuardado = valorGuardado,
                 TotalGasto = totalGastoPessoa,
                 SaldoRestante = saldoFinal,
                 SaldoCritico = saldoFinal < 0,
