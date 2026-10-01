@@ -45,6 +45,12 @@ namespace ControleFinanceiroAPI.Controllers
             return Ok(data);
         }
 
+        [HttpGet("SalariosCadastrados")]
+        public IActionResult SalariosCadastrados()
+        {
+            return Ok(_googleSheetsService.ListarSalariosCadastrados());
+        }
+
         [HttpGet("ResumoPessoaPeriodo")]
         public IActionResult GetResumoPorPessoaEPeriodo(string pessoa, string mesAno)
         {

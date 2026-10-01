@@ -226,6 +226,33 @@ public class GoogleSheetsService
     }
 
 
+    public List<SalarioCadastradoDTO> ListarSalariosCadastrados()
+    {
+        var linhas = ReadData("Config!A1:D");
+        if (linhas == null || linhas.Count <= 1)
+            return new();
+
+        return linhas.Skip(1)
+            .Where(linha => string.Equals(linha.ElementAtOrDefault(1)?.ToString()?.Trim(), "Salario", StringComparison.OrdinalIgnoreCase))
+            .Select(linha => new
+            {
+                Pessoa = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? string.Empty,
+                MesAno = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? string.Empty,
+                Valor = ParseDecimal(linha.ElementAtOrDefault(2)?.ToString())
+            })
+            .Where(linha => !string.IsNullOrWhiteSpace(linha.Pessoa) &&
+                DateTime.TryParseExact(linha.MesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+            .OrderByDescending(linha => DateTime.ParseExact(linha.MesAno, "MM/yyyy", CultureInfo.InvariantCulture))
+            .ThenBy(linha => linha.Pessoa, StringComparer.CurrentCultureIgnoreCase)
+            .Select(linha => new SalarioCadastradoDTO
+            {
+                Pessoa = linha.Pessoa,
+                MesAno = linha.MesAno,
+                Valor = linha.Valor
+            })
+            .ToList();
+    }
+
     public (bool Success, string Message, List<ResumoPessoaMesDTO>? Data) ResumoGeralPorMes()
     {
         try
