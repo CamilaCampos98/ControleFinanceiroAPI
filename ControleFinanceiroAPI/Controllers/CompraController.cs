@@ -145,6 +145,13 @@ namespace ControleFinanceiroAPI.Controllers
             return ToActionResult(result);
         }
 
+        [HttpPost("RegistrarProximosSalarios")]
+        public IActionResult RegistrarProximosSalarios([FromBody] RegistrarProximosSalariosRequest request)
+        {
+            var result = _entradaWorkflowService.RegistrarProximosSalarios(request);
+            return ToActionResult(result);
+        }
+
 
         [HttpPut("EditarCompra")]
         public IActionResult Editar([FromBody] EditarCompraRequest request)

@@ -228,7 +228,7 @@ public class GoogleSheetsService
 
     public List<SalarioCadastradoDTO> ListarSalariosCadastrados()
     {
-        var linhas = ReadData("Config!A1:D");
+        var linhas = ReadData("Config!A1:F");
         if (linhas == null || linhas.Count <= 1)
             return new();
 
@@ -238,7 +238,9 @@ public class GoogleSheetsService
             {
                 Pessoa = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? string.Empty,
                 MesAno = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? string.Empty,
-                Valor = ParseDecimal(linha.ElementAtOrDefault(2)?.ToString())
+                Valor = ParseDecimal(linha.ElementAtOrDefault(2)?.ToString()),
+                ValorHora = ParseDecimal(linha.ElementAtOrDefault(4)?.ToString()),
+                Extras = ParseDecimal(linha.ElementAtOrDefault(5)?.ToString())
             })
             .Where(linha => !string.IsNullOrWhiteSpace(linha.Pessoa) &&
                 DateTime.TryParseExact(linha.MesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
@@ -248,9 +250,75 @@ public class GoogleSheetsService
             {
                 Pessoa = linha.Pessoa,
                 MesAno = linha.MesAno,
-                Valor = linha.Valor
+                Valor = linha.Valor,
+                ValorHora = linha.ValorHora,
+                Extras = linha.Extras
             })
             .ToList();
+    }
+
+    public void WriteEntradasEFixos(IList<IList<object>> entradas, IList<IList<object>> fixos)
+    {
+        var planilha = _service.Spreadsheets.Get(SpreadsheetId).Execute();
+        var configId = planilha.Sheets.FirstOrDefault(sheet => sheet.Properties.Title == "Config")?.Properties.SheetId
+            ?? throw new InvalidOperationException("A aba Config não foi encontrada.");
+        var fixosId = planilha.Sheets.FirstOrDefault(sheet => sheet.Properties.Title == "Fixos")?.Properties.SheetId
+            ?? throw new InvalidOperationException("A aba Fixos não foi encontrada.");
+
+        static RowData CriarLinha(IList<object> valores, bool salario) => new()
+        {
+            Values = valores.Select((valor, coluna) =>
+            {
+                var celula = valor switch
+                {
+                    DateTime data => new CellData
+                    {
+                        UserEnteredValue = new ExtendedValue { NumberValue = data.ToOADate() },
+                        UserEnteredFormat = new CellFormat
+                        {
+                            NumberFormat = new NumberFormat { Type = "DATE", Pattern = "dd/MM/yyyy" }
+                        }
+                    },
+                    decimal numero => new CellData { UserEnteredValue = new ExtendedValue { NumberValue = (double)numero } },
+                    double numero => new CellData { UserEnteredValue = new ExtendedValue { NumberValue = numero } },
+                    long numero => new CellData { UserEnteredValue = new ExtendedValue { NumberValue = numero } },
+                    int numero => new CellData { UserEnteredValue = new ExtendedValue { NumberValue = numero } },
+                    _ => new CellData { UserEnteredValue = new ExtendedValue { StringValue = valor?.ToString() ?? string.Empty } }
+                };
+                if (salario ? coluna is 2 or 4 or 5 : coluna == 5)
+                {
+                    celula.UserEnteredFormat = new CellFormat
+                    {
+                        NumberFormat = new NumberFormat { Type = "NUMBER", Pattern = "#,##0.00" }
+                    };
+                }
+                return celula;
+            }).ToList()
+        };
+
+        var requests = new List<Request>
+        {
+            new()
+            {
+                AppendCells = new AppendCellsRequest
+                {
+                    SheetId = configId,
+                    Rows = entradas.Select(entrada => CriarLinha(entrada, true)).ToList(),
+                    Fields = "userEnteredValue,userEnteredFormat.numberFormat"
+                }
+            },
+            new()
+            {
+                AppendCells = new AppendCellsRequest
+                {
+                    SheetId = fixosId,
+                    Rows = fixos.Select(fixo => CriarLinha(fixo, false)).ToList(),
+                    Fields = "userEnteredValue,userEnteredFormat.numberFormat"
+                }
+            }
+        };
+
+        _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest { Requests = requests }, SpreadsheetId).Execute();
     }
 
     public (bool Success, string Message, List<ResumoPessoaMesDTO>? Data) ResumoGeralPorMes()
