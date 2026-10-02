@@ -233,23 +233,33 @@ public class GoogleSheetsService
             return new();
 
         return linhas.Skip(1)
-            .Where(linha => string.Equals(linha.ElementAtOrDefault(1)?.ToString()?.Trim(), "Salario", StringComparison.OrdinalIgnoreCase))
-            .Select(linha => new
+            .Where(linha =>
             {
-                Pessoa = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? string.Empty,
-                MesAno = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? string.Empty,
-                Valor = ParseDecimal(linha.ElementAtOrDefault(2)?.ToString()),
-                ValorHora = ParseDecimal(linha.ElementAtOrDefault(4)?.ToString()),
-                Extras = ParseDecimal(linha.ElementAtOrDefault(5)?.ToString())
+                var tipo = linha.ElementAtOrDefault(1)?.ToString()?.Trim();
+                return string.Equals(tipo, "Salario", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(tipo, "Salário", StringComparison.OrdinalIgnoreCase);
             })
-            .Where(linha => !string.IsNullOrWhiteSpace(linha.Pessoa) &&
-                DateTime.TryParseExact(linha.MesAno, "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
-            .OrderByDescending(linha => DateTime.ParseExact(linha.MesAno, "MM/yyyy", CultureInfo.InvariantCulture))
+            .Select(linha =>
+            {
+                var mesAno = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? string.Empty;
+                DateTime.TryParseExact(mesAno, new[] { "M/yyyy", "MM/yyyy" },
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var periodo);
+                return new
+                {
+                    Pessoa = linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? string.Empty,
+                    Periodo = periodo,
+                    Valor = ParseDecimal(linha.ElementAtOrDefault(2)?.ToString()),
+                    ValorHora = ParseDecimal(linha.ElementAtOrDefault(4)?.ToString()),
+                    Extras = ParseDecimal(linha.ElementAtOrDefault(5)?.ToString())
+                };
+            })
+            .Where(linha => !string.IsNullOrWhiteSpace(linha.Pessoa) && linha.Periodo != default)
+            .OrderByDescending(linha => linha.Periodo)
             .ThenBy(linha => linha.Pessoa, StringComparer.CurrentCultureIgnoreCase)
             .Select(linha => new SalarioCadastradoDTO
             {
                 Pessoa = linha.Pessoa,
-                MesAno = linha.MesAno,
+                MesAno = linha.Periodo.ToString("MM/yyyy", CultureInfo.InvariantCulture),
                 Valor = linha.Valor,
                 ValorHora = linha.ValorHora,
                 Extras = linha.Extras

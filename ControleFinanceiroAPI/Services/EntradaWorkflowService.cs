@@ -46,13 +46,13 @@ public sealed class EntradaWorkflowService
             var salarios = linhas.Skip(1)
                 .Where(linha => string.Equals(linha.ElementAtOrDefault(0)?.ToString()?.Trim(),
                     request.Pessoa.Trim(), StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(linha.ElementAtOrDefault(1)?.ToString()?.Trim(), "Salario", StringComparison.OrdinalIgnoreCase))
+                    (string.Equals(linha.ElementAtOrDefault(1)?.ToString()?.Trim(), "Salario", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(linha.ElementAtOrDefault(1)?.ToString()?.Trim(), "Salário", StringComparison.OrdinalIgnoreCase)))
                 .Select(linha => new
                 {
                     Linha = linha,
-                    MesAno = linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? string.Empty,
                     PeriodoValido = DateTime.TryParseExact(linha.ElementAtOrDefault(3)?.ToString()?.Trim(),
-                        "MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var periodo),
+                        new[] { "M/yyyy", "MM/yyyy" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out var periodo),
                     Periodo = periodo
                 })
                 .Where(salario => salario.PeriodoValido)
@@ -62,7 +62,8 @@ public sealed class EntradaWorkflowService
             if (salarios == null)
                 return OperationResult.BadRequest("Essa pessoa ainda não possui salário cadastrado.");
 
-            if (!string.Equals(salarios.MesAno, request.UltimoMesAno, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(salarios.Periodo.ToString("MM/yyyy", CultureInfo.InvariantCulture),
+                request.UltimoMesAno, StringComparison.OrdinalIgnoreCase))
                 return OperationResult.BadRequest("O último salário mudou desde a prévia. Atualize a página e confira novamente.");
 
             var valorHoraAtual = _googleSheetsService.ParseDecimal(salarios.Linha.ElementAtOrDefault(4)?.ToString());
