@@ -18,15 +18,18 @@ namespace ControleFinanceiroAPI.Controllers
         private readonly GoogleSheetsService _googleSheetsService;
         private readonly CompraWorkflowService _compraWorkflowService;
         private readonly EntradaWorkflowService _entradaWorkflowService;
+        private readonly VacationPlanningService _vacationPlanningService;
         public string SheetName = "Controle";
         public CompraController(
             GoogleSheetsService googleSheetsService,
             CompraWorkflowService compraWorkflowService,
-            EntradaWorkflowService entradaWorkflowService)
+            EntradaWorkflowService entradaWorkflowService,
+            VacationPlanningService vacationPlanningService)
         {
             _googleSheetsService = googleSheetsService;
             _compraWorkflowService = compraWorkflowService;
             _entradaWorkflowService = entradaWorkflowService;
+            _vacationPlanningService = vacationPlanningService;
         }
 
         [HttpGet("Get")]
@@ -49,6 +52,38 @@ namespace ControleFinanceiroAPI.Controllers
         public IActionResult SalariosCadastrados()
         {
             return Ok(_googleSheetsService.ListarSalariosCadastrados());
+        }
+
+        [HttpPost("Ferias/Previa")]
+        public async Task<IActionResult> PreviaFerias([FromBody] VacationPlanRequest request)
+        {
+            try { return Ok(await _vacationPlanningService.PreviewAsync(request)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            { return BadRequest(new { message = exception.Message }); }
+        }
+
+        [HttpPost("Ferias/Confirmar")]
+        public async Task<IActionResult> ConfirmarFerias([FromBody] VacationPlanRequest request)
+        {
+            try { return Ok(await _vacationPlanningService.ConfirmAsync(request)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            { return BadRequest(new { message = exception.Message }); }
+        }
+
+        [HttpGet("Ferias/FechamentoPeriodo")]
+        public IActionResult PreviaFechamentoFerias(string pessoa, string periodo)
+        {
+            try { return Ok(_googleSheetsService.PreviewVacationPeriodClosing(pessoa, periodo)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            { return BadRequest(new { message = exception.Message }); }
+        }
+
+        [HttpPost("Ferias/FechamentoPeriodo")]
+        public IActionResult FecharPeriodoFerias([FromBody] VacationPeriodClosingRequest request)
+        {
+            try { return Ok(_googleSheetsService.CloseVacationPeriod(request)); }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            { return BadRequest(new { message = exception.Message }); }
         }
 
         [HttpGet("ResumoPessoaPeriodo")]
@@ -225,7 +260,7 @@ namespace ControleFinanceiroAPI.Controllers
                     var linha = dados[i];
 
                     // Garante que a linha tenha 7 colunas (preenche com null se faltar)
-                    while (linha.Count < 7)
+                    while (linha.Count < 8)
                         linha.Add(null);
 
                     // Se a coluna Pessoa (index 3) for diferente da pessoa buscada, pula
@@ -234,7 +269,7 @@ namespace ControleFinanceiroAPI.Controllers
 
                     var fixo = new FixoModel
                     {
-                        Id = long.TryParse(linha[0]?.ToString(), out var idVal) ? idVal : 0,
+                        Id = linha[0]?.ToString()?.Trim() ?? string.Empty,
                         Tipo = linha[1]?.ToString(),
                         MesAno = linha[2]?.ToString(),
                         Vencimento = linha[4]?.ToString(),
@@ -345,7 +380,8 @@ namespace ControleFinanceiroAPI.Controllers
                 var fixosAnteriores = linhas.Skip(1)
                     .Where(l =>
                         string.Equals(l.ElementAtOrDefault(3)?.ToString(), payload.Pessoa, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(l.ElementAtOrDefault(2)?.ToString(), payload.MesAnoOrigem, StringComparison.OrdinalIgnoreCase))
+                        string.Equals(l.ElementAtOrDefault(2)?.ToString(), payload.MesAnoOrigem, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(l.ElementAtOrDefault(1)?.ToString()?.Trim(), "Guardado para férias", StringComparison.OrdinalIgnoreCase))
                     .ToList();
 
                 if (!fixosAnteriores.Any())
@@ -355,7 +391,8 @@ namespace ControleFinanceiroAPI.Controllers
                 var jaExistem = linhas.Skip(1)
                     .Any(l =>
                         string.Equals(l.ElementAtOrDefault(3)?.ToString(), payload.Pessoa, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(l.ElementAtOrDefault(2)?.ToString(), payload.MesAnoDestino, StringComparison.OrdinalIgnoreCase));
+                        string.Equals(l.ElementAtOrDefault(2)?.ToString(), payload.MesAnoDestino, StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(l.ElementAtOrDefault(1)?.ToString()?.Trim(), "Guardado para férias", StringComparison.OrdinalIgnoreCase));
 
                 if (jaExistem)
                     return Conflict(new { status = "erro", message = $"Já existem fixos cadastrados para {payload.MesAnoDestino}." });
@@ -446,7 +483,8 @@ namespace ControleFinanceiroAPI.Controllers
 
                 // Encontrar a linha pelo Id (assumindo que Id está na coluna 0)
                 var listaDados = dados.ToList();
-                var linhaIndex = listaDados.FindIndex(row => row.Count > 0 && row[0]?.ToString() == model.Id);
+                var linhaIndex = listaDados.FindIndex(row => row.Count > 0 &&
+                    string.Equals(row[0]?.ToString()?.Trim(), model.Id.Trim(), StringComparison.Ordinal));
 
                 if (linhaIndex == -1)
                     return NotFound(new { status = "erro", message = "Fixo não encontrado" });

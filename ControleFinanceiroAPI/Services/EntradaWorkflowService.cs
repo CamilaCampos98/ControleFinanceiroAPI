@@ -115,15 +115,18 @@ public sealed class EntradaWorkflowService
                 .Where(fixo => fixo.PeriodoValido)
                 .ToList();
 
-            var periodoOrigem = fixosDaPessoa
+            var fixosRecorrentes = fixosDaPessoa.Where(fixo =>
+                !string.Equals(fixo.Linha.ElementAtOrDefault(1)?.ToString()?.Trim(), "Guardado para férias",
+                    StringComparison.OrdinalIgnoreCase)).ToList();
+            var periodoOrigem = fixosRecorrentes
                 .Where(fixo => fixo.Periodo < primeiroPeriodo)
                 .Select(fixo => (DateTime?)fixo.Periodo)
                 .Max();
             if (!periodoOrigem.HasValue)
                 return OperationResult.BadRequest("Essa pessoa não possui fixos anteriores para copiar.");
 
-            var fixosOrigem = fixosDaPessoa.Where(fixo => fixo.Periodo == periodoOrigem.Value).ToList();
-            var fixoExistente = fixosDaPessoa.FirstOrDefault(fixo => fixo.Periodo >= primeiroPeriodo &&
+            var fixosOrigem = fixosRecorrentes.Where(fixo => fixo.Periodo == periodoOrigem.Value).ToList();
+            var fixoExistente = fixosRecorrentes.FirstOrDefault(fixo => fixo.Periodo >= primeiroPeriodo &&
                 fixo.Periodo <= primeiroPeriodo.AddMonths(5));
             if (fixoExistente != null)
                 return OperationResult.BadRequest($"Já existem fixos em {fixoExistente.Periodo:MM/yyyy}. " +

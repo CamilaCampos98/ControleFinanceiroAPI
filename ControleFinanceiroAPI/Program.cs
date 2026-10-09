@@ -30,6 +30,7 @@ builder.Services.Configure<GoogleSheetsOptions>(builder.Configuration.GetSection
 builder.Services.AddSingleton<GoogleSheetsService>();
 builder.Services.AddScoped<CompraWorkflowService>();
 builder.Services.AddScoped<EntradaWorkflowService>();
+builder.Services.AddScoped<VacationPlanningService>();
 
 builder.Services.AddCors(options =>
 {

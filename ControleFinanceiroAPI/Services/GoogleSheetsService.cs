@@ -10,7 +10,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 
-public class GoogleSheetsService
+public partial class GoogleSheetsService
 {
     static readonly string[] Scopes = { SheetsService.Scope.Spreadsheets };
     static readonly string ApplicationName = "ControleFinanceiro";
@@ -316,19 +316,199 @@ public class GoogleSheetsService
                     Rows = entradas.Select(entrada => CriarLinha(entrada, true)).ToList(),
                     Fields = "userEnteredValue,userEnteredFormat.numberFormat"
                 }
-            },
-            new()
-            {
-                AppendCells = new AppendCellsRequest
-                {
-                    SheetId = fixosId,
-                    Rows = fixos.Select(fixo => CriarLinha(fixo, false)).ToList(),
-                    Fields = "userEnteredValue,userEnteredFormat.numberFormat"
-                }
             }
         };
+        if (fixos.Count > 0)
+            requests.Add(new Request { AppendCells = new AppendCellsRequest
+            {
+                SheetId = fixosId,
+                Rows = fixos.Select(fixo => CriarLinha(fixo, false)).ToList(),
+                Fields = "userEnteredValue,userEnteredFormat.numberFormat"
+            } });
 
         _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest { Requests = requests }, SpreadsheetId).Execute();
+    }
+
+    public List<VacationPlanRequest> ReadVacationPlans()
+    {
+        var rows = VacationRows();
+        return rows.Skip(1).Where(row => !string.IsNullOrWhiteSpace(row.ElementAtOrDefault(0)?.ToString())).Select(row =>
+        {
+            var people = System.Text.Json.JsonSerializer.Deserialize<List<VacationPersonPreview>>(
+                row.ElementAtOrDefault(4)?.ToString() ?? "[]") ?? new();
+            return new VacationPlanRequest
+            {
+                StartDate = DateTime.ParseExact(row.ElementAtOrDefault(1)?.ToString() ?? "", "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                EndDate = DateTime.ParseExact(row.ElementAtOrDefault(2)?.ToString() ?? "", "yyyy-MM-dd", CultureInfo.InvariantCulture),
+                Participants = people.Select(person => new VacationParticipant { Person = person.Person, Percent = person.Percent }).ToList()
+            };
+        }).ToList();
+    }
+
+    public (Dictionary<(string Person, string Period), decimal> Losses,
+        Dictionary<(string Person, string Period), decimal> Coverage) ReadVacationIncomeAdjustments()
+    {
+        var losses = new Dictionary<(string Person, string Period), decimal>();
+        var coverage = new Dictionary<(string Person, string Period), decimal>();
+        foreach (var row in VacationRows().Skip(1).Where(row => !string.IsNullOrWhiteSpace(row.ElementAtOrDefault(0)?.ToString())))
+        {
+            var people = System.Text.Json.JsonSerializer.Deserialize<List<VacationPersonPreview>>(
+                row.ElementAtOrDefault(4)?.ToString() ?? "[]") ?? new();
+            foreach (var person in people)
+            {
+                foreach (var (period, value) in person.LossByPeriod)
+                {
+                    var key = (person.Person.ToUpperInvariant(), period);
+                    losses[key] = losses.GetValueOrDefault(key) + value;
+                }
+                foreach (var (period, value) in person.IncomeCoverageByPeriod)
+                {
+                    var key = (person.Person.ToUpperInvariant(), period);
+                    coverage[key] = coverage.GetValueOrDefault(key) + value;
+                }
+            }
+        }
+        return (losses, coverage);
+    }
+
+    private IList<IList<object>> VacationRows()
+    {
+        var sheet = _service.Spreadsheets.Get(SpreadsheetId).Execute();
+        if (!sheet.Sheets.Any(item => item.Properties.Title == "Ferias")) return Array.Empty<IList<object>>();
+        var rows = ReadData("Ferias!A1:F") ?? Array.Empty<IList<object>>();
+        if (rows.Count == 0 || rows[0].ElementAtOrDefault(0)?.ToString() != "Id" ||
+            rows[0].ElementAtOrDefault(4)?.ToString() != "ParticipantesJson")
+            throw new InvalidOperationException("A aba Ferias já existe com colunas diferentes das esperadas.");
+        return rows;
+    }
+
+    public void WriteVacationPlan(VacationPlanRequest request, VacationOptionPreview preview)
+    {
+        lock (_lockId)
+        {
+            if (ReadVacationPlans().Any(plan => plan.StartDate.Date <= request.EndDate.Date &&
+                plan.EndDate.Date >= request.StartDate.Date && plan.Participants.Any(person =>
+                    request.Participants.Any(selected => string.Equals(person.Person, selected.Person,
+                        StringComparison.OrdinalIgnoreCase)))))
+                throw new InvalidOperationException("Uma das pessoas já possui férias planejadas nesse intervalo.");
+
+            var currentFixedRows = ReadData("Fixos!A1:H") ?? Array.Empty<IList<object>>();
+            var availableGuardado = ControleFinanceiroAPI.Services.VacationPlanningService.AvailableGuardado(request,
+                currentFixedRows.Skip(1).ToList());
+            ControleFinanceiroAPI.Services.VacationPlanningService.ValidateGuardadoTransfers(request, availableGuardado);
+            var expectedTransfers = request.UseGuardado
+                ? ControleFinanceiroAPI.Services.VacationPlanningService.CalculateAutomaticTransfers(
+                    availableGuardado, preview.People) : new List<VacationGuardadoTransfer>();
+            if (request.GuardadoTransfers.Count != expectedTransfers.Count ||
+                request.GuardadoTransfers.Any(transfer => !expectedTransfers.Any(expected =>
+                    expected.RowNumber == transfer.RowNumber && expected.Id == transfer.Id &&
+                    expected.VacationAmount == transfer.VacationAmount &&
+                    expected.IncomeAmount == transfer.IncomeAmount)))
+                throw new InvalidOperationException("O Guardado mudou desde a prévia. Compare as datas novamente.");
+
+            var spreadsheet = _service.Spreadsheets.Get(SpreadsheetId).Execute();
+            var vacationId = spreadsheet.Sheets.FirstOrDefault(sheet => sheet.Properties.Title == "Ferias")?.Properties.SheetId;
+            if (vacationId == null)
+            {
+                var created = _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest
+                {
+                    Requests = new List<Request> { new() { AddSheet = new AddSheetRequest { Properties = new SheetProperties { Title = "Ferias" } } } }
+                }, SpreadsheetId).Execute();
+                vacationId = created.Replies[0].AddSheet.Properties.SheetId;
+                var header = new ValueRange { Values = new List<IList<object>>
+                {
+                    new List<object> { "Id", "Inicio", "Fim", "Orcamento", "ParticipantesJson", "CriadoEm" }
+                } };
+                var update = _service.Spreadsheets.Values.Update(header, SpreadsheetId, "Ferias!A1:F1");
+                update.ValueInputOption = SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.RAW;
+                update.Execute();
+            }
+
+            var fixosId = spreadsheet.Sheets.FirstOrDefault(sheet => sheet.Properties.Title == "Fixos")?.Properties.SheetId
+                ?? throw new InvalidOperationException("A aba Fixos não foi encontrada.");
+            var planId = Guid.NewGuid().ToString("N");
+            static RowData Row(params object[] values) => new()
+            {
+                Values = values.Select(value => value switch
+                {
+                    DateTime date => new CellData
+                    {
+                        UserEnteredValue = new ExtendedValue { NumberValue = date.ToOADate() },
+                        UserEnteredFormat = new CellFormat { NumberFormat = new NumberFormat { Type = "DATE", Pattern = "dd/MM/yyyy" } }
+                    },
+                    decimal amount => new CellData { UserEnteredValue = new ExtendedValue { NumberValue = (double)amount } },
+                    long number => new CellData { UserEnteredValue = new ExtendedValue { NumberValue = number } },
+                    _ => new CellData { UserEnteredValue = new ExtendedValue { StringValue = value?.ToString() ?? "" } }
+                }).ToList()
+            };
+
+            var planRow = Row(planId, request.StartDate.ToString("yyyy-MM-dd"), request.EndDate.ToString("yyyy-MM-dd"),
+                request.Budget, System.Text.Json.JsonSerializer.Serialize(preview.People), DateTimeOffset.UtcNow.ToString("O"));
+            var requests = new List<Request> { new() { AppendCells = new AppendCellsRequest
+            {
+                SheetId = vacationId, Rows = new List<RowData> { planRow }, Fields = "userEnteredValue"
+            } } };
+            var savings = new List<RowData>();
+            foreach (var transfer in request.GuardadoTransfers)
+            {
+                var match = new { Row = currentFixedRows[transfer.RowNumber - 1], Index = transfer.RowNumber - 1 };
+                var remaining = ParseDecimal(match.Row.ElementAtOrDefault(5)?.ToString()) -
+                    transfer.VacationAmount - transfer.IncomeAmount;
+                requests.Add(new Request { RepeatCell = new RepeatCellRequest
+                {
+                    Range = new GridRange { SheetId = fixosId, StartRowIndex = match.Index,
+                        EndRowIndex = match.Index + 1, StartColumnIndex = 5, EndColumnIndex = 6 },
+                    Cell = new CellData { UserEnteredValue = new ExtendedValue { NumberValue = (double)remaining } },
+                    Fields = "userEnteredValue"
+                } });
+                foreach (var (purpose, amount) in new[]
+                {
+                    ("Guardado para férias", transfer.VacationAmount),
+                    ("Guardado para dias sem faturamento", transfer.IncomeAmount)
+                })
+                {
+                    if (amount <= 0) continue;
+                    savings.Add(Row(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000 + savings.Count,
+                        purpose, match.Row.ElementAtOrDefault(2)?.ToString()?.Trim() ?? "",
+                        match.Row.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "",
+                        match.Row.ElementAtOrDefault(4)?.ToString()?.Trim() ?? "",
+                        amount, match.Row.ElementAtOrDefault(6)?.ToString() ?? "Não",
+                        match.Row.ElementAtOrDefault(7)?.ToString() ?? ""));
+                }
+            }
+            var today = ControleFinanceiroAPI.Services.VacationPlanningService.TodayBrazil;
+            var currentPeriod = new DateTime(today.Year, today.Month, 1)
+                .AddMonths(today.Day >= 26 ? 1 : 0);
+            foreach (var person in preview.People)
+            {
+                foreach (var (purpose, remainingTarget, monthlyAmount) in new[]
+                {
+                    ("Guardado para férias", person.BudgetShare - person.GuardadoAllocated, person.MonthlySaving),
+                    ("Guardado para dias sem faturamento",
+                        person.LostIncome - person.IncomeGuardadoAllocated, person.IncomeMonthlySaving)
+                })
+                {
+                    decimal saved = 0;
+                    for (var index = 0; index < preview.SavingPeriods; index++)
+                    {
+                        var period = currentPeriod.AddMonths(index);
+                        var amount = index == preview.SavingPeriods - 1
+                            ? remainingTarget - saved : monthlyAmount;
+                        saved += amount;
+                        if (amount <= 0) continue;
+                        savings.Add(Row(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000 + savings.Count,
+                            purpose, period.ToString("MM/yyyy", CultureInfo.InvariantCulture), person.Person,
+                            period.AddMonths(1).AddDays(14), amount, "Não", ""));
+                    }
+                }
+            }
+            if (savings.Count > 0)
+                requests.Add(new Request { AppendCells = new AppendCellsRequest
+                {
+                    SheetId = fixosId, Rows = savings, Fields = "userEnteredValue,userEnteredFormat.numberFormat"
+                } });
+            _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest { Requests = requests }, SpreadsheetId).Execute();
+        }
     }
 
     public (bool Success, string Message, List<ResumoPessoaMesDTO>? Data) ResumoGeralPorMes()
@@ -338,6 +518,7 @@ public class GoogleSheetsService
             var linhasControle = ReadData("Controle!A1:J");
             var configData = ReadData("Config!A1:F");
             var fixosData = ReadData("Fixos!A1:H");
+            var (vacationLosses, vacationCoverage) = ReadVacationIncomeAdjustments();
 
             if (linhasControle == null || configData == null || fixosData == null)
                 return (false, "Dados insuficientes nas planilhas.", null);
@@ -365,7 +546,7 @@ public class GoogleSheetsService
                 {
                     string mesAnoStr = dataMes.ToString("MM/yyyy");
 
-                    var resumo = GetResumoPorPessoaEPeriodoInternal(pessoa, mesAnoStr, (List<IList<object>>)configData, (List<IList<object>>)fixosData, (List<IList<object>>)linhasControle);
+                    var resumo = GetResumoPorPessoaEPeriodoInternal(pessoa, mesAnoStr, (List<IList<object>>)configData, (List<IList<object>>)fixosData, (List<IList<object>>)linhasControle, vacationLosses, vacationCoverage);
                     if (resumo.Success && resumo.Data != null)
                     {
                         resultado.Add(new ResumoPessoaMesDTO
@@ -392,7 +573,9 @@ public class GoogleSheetsService
     string mesAno,
     List<IList<object>> configData,
     List<IList<object>> fixosData,
-    List<IList<object>> controleData)
+    List<IList<object>> controleData,
+    Dictionary<(string Person, string Period), decimal> vacationLosses,
+    Dictionary<(string Person, string Period), decimal> vacationCoverage)
     {
         string tratativaAtual = "";
         try
@@ -560,7 +743,9 @@ public class GoogleSheetsService
                             f.Tipo?.IndexOf("guardado", StringComparison.OrdinalIgnoreCase) < 0)
                 .Sum(f => (decimal)f.Valor);
 
-            decimal saldoFinal = (salario + extras) - fixosPessoa - totalGastoControle;
+            var vacationLoss = vacationLosses.GetValueOrDefault((pessoa.ToUpperInvariant(), mesAno));
+            var coverage = vacationCoverage.GetValueOrDefault((pessoa.ToUpperInvariant(), mesAno));
+            decimal saldoFinal = (Math.Max(0, salario - vacationLoss) + extras + coverage) - fixosPessoa - totalGastoControle;
 
             return (true, "Sucesso", new
             {
@@ -588,6 +773,7 @@ public class GoogleSheetsService
             var configData = ReadData("Config!A1:L");
             var fixosData = ReadData("Fixos!A1:H");
             var controleData = ReadData("Controle!A1:J");
+            var (vacationLosses, vacationCoverage) = ReadVacationIncomeAdjustments();
 
             // Mapear Config
             var configs = configData.Skip(1).Select(row => new
@@ -718,7 +904,10 @@ public class GoogleSheetsService
                 .Where(c => c.Pessoa.Equals(pessoa, StringComparison.OrdinalIgnoreCase) && c.mesAno == mesAno)
                 .ToList();
 
-            var salario = dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase)).Sum(c => c.Valor);
+            var salarioBase = dadosConfig.Where(c => c.Fonte.Equals("Salario", StringComparison.OrdinalIgnoreCase)).Sum(c => c.Valor);
+            var vacationLoss = vacationLosses.GetValueOrDefault((pessoa.ToUpperInvariant(), mesAno));
+            var coverage = vacationCoverage.GetValueOrDefault((pessoa.ToUpperInvariant(), mesAno));
+            var salario = Math.Max(0, salarioBase - vacationLoss);
             var extra = dadosConfig.Sum(c => c.Extras);
 
             // Fixos da pessoa
@@ -805,13 +994,15 @@ public class GoogleSheetsService
             // ----------------------------
 
             var totalGastoPessoa = controlePessoa.Sum(c => c.Valor);
-            var saldoFinal = (salario + extra) - gastosFixosSemGuardado - valorGuardado - totalGastoPessoa;
+            var saldoFinal = (salario + extra + coverage) - gastosFixosSemGuardado - valorGuardado - totalGastoPessoa;
 
             var resultado = new
             {
                 Pessoa = pessoa,
                 Periodo = mesAno,
                 Salario = salario,
+                ReceitaNaoFaturadaFerias = vacationLoss,
+                CoberturaDiasSemFaturamento = coverage,
                 Extras = extra,
                 GastosFixos = gastosFixosSemGuardado,
                 ValorGuardado = valorGuardado,
