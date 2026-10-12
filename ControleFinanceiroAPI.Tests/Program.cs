@@ -10,6 +10,65 @@ static void Equal<T>(T expected, T actual, string name)
 static int Weekdays(DateTime start, DateTime end) => Enumerable.Range(0, (end - start).Days + 1)
     .Count(offset => start.AddDays(offset).DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday);
 
+var salonInstallments = PartyScheduleCalculator.Split(1570m, 6, 0);
+Equal(6, salonInstallments.Count, "salão em seis meses");
+Equal(1570m, salonInstallments.Sum(), "salão sem perda de centavos");
+Equal(261.67m, salonInstallments[0], "primeira parcela do salão");
+Equal(261.66m, salonInstallments[^1], "última parcela ajusta centavos");
+var souvenirInstallments = PartyScheduleCalculator.Split(397m, 3, 100m);
+Equal(397m, souvenirInstallments.Sum(), "lembrancinhas sem perda de centavos");
+Equal(true, souvenirInstallments.All(amount => amount >= 100m), "lembrancinhas respeitam parcela mínima");
+try
+{
+    PartyScheduleCalculator.Split(397m, 4, 100m);
+    throw new Exception("quatro parcelas de no mínimo R$ 100 deveriam ser recusadas");
+}
+catch (ArgumentException) { }
+var partyBalance = new PartySnapshot
+{
+    Event = new PartyEvent("livia", "Festa", new DateTime(2027, 3, 27)),
+    Items =
+    [
+        new PartyItem("salao", "livia", "Salão", "Espaço e decoração", 1970m),
+        new PartyItem("lembrancinhas", "livia", "Itens", "Lembrancinhas", 597m)
+    ],
+    Installments = [new PartyInstallment("salao-out", "livia", "Salão", null, new DateTime(2026, 10, 15), 1570m)],
+    Payments =
+    [
+        new PartyPayment("historico-salao", "livia", "Salão", null, null, "Sinal", new DateTime(2026, 8, 13), 400m),
+        new PartyPayment("historico-lembrancinhas", "livia", "Itens", "lembrancinhas", null, "Sinal", new DateTime(2026, 9, 15), 200m)
+    ]
+};
+Equal(0m, PartyBalanceCalculator.Unplanned(partyBalance, "Salão", null), "salão já planejado integralmente");
+Equal(397m, PartyBalanceCalculator.Unplanned(partyBalance, "Itens", "lembrancinhas"),
+    "lembrancinhas pendentes de planejamento");
+partyBalance.Payments.Add(new PartyPayment("salao-parcela", "livia", "Salão", null, "salao-out",
+    "Parcela paga", new DateTime(2026, 10, 15), 200m));
+Equal(0m, PartyBalanceCalculator.Unplanned(partyBalance, "Salão", null),
+    "pagar parcela não reduz duas vezes o saldo planejado");
+var namedSalon = new PartyInstallment("salao-nov", "livia", "Salão", null,
+    new DateTime(2026, 11, 15), 261.67m);
+var namedSouvenir = new PartyInstallment("lembrancinha-out", "livia", "Itens", "lembrancinhas",
+    new DateTime(2026, 10, 15), 132.34m);
+var namingSnapshot = new PartySnapshot
+{
+    Items = partyBalance.Items,
+    Installments = [namedSalon, namedSouvenir],
+    Payments =
+    [
+        new PartyPayment("paid-salon", "livia", "Salão", null, null, "Parcela 1 salão",
+            new DateTime(2026, 9, 15), 200m),
+        new PartyPayment("paid-souvenir", "livia", "Itens", "lembrancinhas", null,
+            "Parcela 1 lembrancinhas", new DateTime(2026, 9, 15), 200m)
+    ]
+};
+Equal("Parcela 2 salão", PartyPaymentNaming.Describe(namingSnapshot, namedSalon, namedSalon.Amount),
+    "próxima parcela do salão continua a numeração importada");
+Equal("Parcela 2 lembrancinhas", PartyPaymentNaming.Describe(namingSnapshot, namedSouvenir, namedSouvenir.Amount),
+    "próxima parcela das lembrancinhas continua a numeração importada");
+Equal("Parcela 2 salão (pagamento parcial)", PartyPaymentNaming.Describe(namingSnapshot, namedSalon, 100m),
+    "pagamento parcial fica identificado no histórico");
+
 Equal("09/2026", VacationPlanningService.SalaryPeriod(new DateTime(2026, 9, 25)).ToString("MM/yyyy"), "dia 25 pertence ao período atual");
 Equal("10/2026", VacationPlanningService.SalaryPeriod(new DateTime(2026, 9, 26)).ToString("MM/yyyy"), "dia 26 muda o período");
 
@@ -328,4 +387,4 @@ Equal(0m, firstTrip.IncomeCoverageByPeriod["03/2027"], "cobertura mais próxima 
 Equal(100m, secondTrip.IncomeCoverageByPeriod["08/2027"], "cobertura seguinte mantém saldo correto");
 Equal(60m, secondTrip.IncomeReserveShortfall, "falta de cobertura fica registrada");
 
-Console.WriteLine("Testes de férias: período, dias úteis, receita, divisão e saldo passaram.");
+Console.WriteLine("Testes de férias e da festa passaram.");

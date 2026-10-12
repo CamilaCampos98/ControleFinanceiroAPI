@@ -2,5 +2,5 @@ namespace ControleFinanceiroAPI;
 
 public static class ApplicationVersion
 {
-    public const string Current = "20261009.v1";
+    public const string Current = "20261012.v1";
 }
