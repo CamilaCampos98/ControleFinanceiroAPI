@@ -9,7 +9,9 @@ public partial class GoogleSheetsService
     private sealed record ClosingPlan(int RowIndex, DateTime Start, VacationPersonPreview Person,
         List<VacationPersonPreview> People);
 
-    private sealed record ClosingFixedRow(int RowIndex, string Type, decimal Amount);
+    private sealed record ClosingFixedRow(int RowIndex, string Id, string Type, decimal Amount);
+
+    internal sealed record ClosingAdjustedRow(int RowIndex, string Id, decimal Amount);
 
     private sealed record ClosingState(VacationPeriodClosingPreview Preview, List<ClosingPlan> Plans,
         List<ClosingFixedRow> GuardadoRows);
@@ -50,7 +52,8 @@ public partial class GoogleSheetsService
                 update.ValueInputOption = Google.Apis.Sheets.v4.SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.RAW;
                 update.Execute();
             }
-            var requests = new List<Request>();
+            var adjustmentRequests = new List<Request>();
+            var adjustedRows = new List<ClosingAdjustedRow>();
             var remaining = preview.ReductionNeeded;
             var plans = state.Plans.OrderBy(plan => plan.Start).ToList();
 
@@ -65,12 +68,14 @@ public partial class GoogleSheetsService
                 else if (ClosingTypePriority(fixedRow.Type) == 2)
                     AssignVacationReserveReduction(plans, amount, income: true);
 
-                requests.Add(new Request { RepeatCell = new RepeatCellRequest
+                var adjustedAmount = fixedRow.Amount - amount;
+                adjustedRows.Add(new ClosingAdjustedRow(fixedRow.RowIndex, fixedRow.Id, adjustedAmount));
+                adjustmentRequests.Add(new Request { RepeatCell = new RepeatCellRequest
                 {
                     Range = new GridRange { SheetId = fixedSheetId, StartRowIndex = fixedRow.RowIndex,
                         EndRowIndex = fixedRow.RowIndex + 1, StartColumnIndex = 5, EndColumnIndex = 6 },
                     Cell = new CellData { UserEnteredValue = new ExtendedValue
-                    { NumberValue = (double)(fixedRow.Amount - amount) } },
+                    { NumberValue = (double)adjustedAmount } },
                     Fields = "userEnteredValue"
                 } });
                 remaining -= amount;
@@ -78,6 +83,29 @@ public partial class GoogleSheetsService
             if (remaining > 0)
                 throw new InvalidOperationException("O Guardado disponível não cobre o ajuste necessário.");
 
+            foreach (var group in plans.GroupBy(plan => plan.RowIndex))
+            {
+                var plan = group.First();
+                adjustmentRequests.Add(new Request { RepeatCell = new RepeatCellRequest
+                {
+                    Range = new GridRange { SheetId = vacationSheetId, StartRowIndex = plan.RowIndex,
+                        EndRowIndex = plan.RowIndex + 1, StartColumnIndex = 4, EndColumnIndex = 5 },
+                    Cell = new CellData { UserEnteredValue = new ExtendedValue
+                    { StringValue = JsonSerializer.Serialize(plan.People) } },
+                    Fields = "userEnteredValue"
+                } });
+            }
+            if (adjustmentRequests.Count > 0)
+                _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest
+                { Requests = adjustmentRequests }, SpreadsheetId).Execute();
+
+            var actualFixedRows = ReadData("Fixos!A1:H") ?? Array.Empty<IList<object>>();
+            var actualBalance = ReadVacationPeriodClosing(request.Person, request.Period).Preview.CurrentBalance;
+            if (!ClosingAdjustmentMatches(actualFixedRows, adjustedRows, actualBalance, preview.ProjectedBalance))
+                throw new InvalidOperationException("O ajuste do Guardado não foi confirmado na planilha. " +
+                    "O período não foi marcado como fechado. Atualize o resumo antes de tentar novamente.");
+
+            var closingRequests = new List<Request>();
             foreach (var plan in plans)
             {
                 plan.Person.ClosedPeriods ??= new List<string>();
@@ -87,7 +115,7 @@ public partial class GoogleSheetsService
             foreach (var group in plans.GroupBy(plan => plan.RowIndex))
             {
                 var plan = group.First();
-                requests.Add(new Request { RepeatCell = new RepeatCellRequest
+                closingRequests.Add(new Request { RepeatCell = new RepeatCellRequest
                 {
                     Range = new GridRange { SheetId = vacationSheetId, StartRowIndex = plan.RowIndex,
                         EndRowIndex = plan.RowIndex + 1, StartColumnIndex = 4, EndColumnIndex = 5 },
@@ -96,7 +124,7 @@ public partial class GoogleSheetsService
                     Fields = "userEnteredValue"
                 } });
             }
-            requests.Add(new Request { AppendCells = new AppendCellsRequest
+            closingRequests.Add(new Request { AppendCells = new AppendCellsRequest
             {
                 SheetId = closingSheetId,
                 Rows = new List<RowData> { new() { Values = new List<CellData>
@@ -108,7 +136,12 @@ public partial class GoogleSheetsService
                 } } },
                 Fields = "userEnteredValue"
             } });
-            _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest { Requests = requests }, SpreadsheetId).Execute();
+            _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest
+            { Requests = closingRequests }, SpreadsheetId).Execute();
+            var completed = ReadVacationPeriodClosing(request.Person, request.Period).Preview;
+            if (!completed.IsClosed || completed.CurrentBalance != preview.ProjectedBalance)
+                throw new InvalidOperationException("Não foi possível confirmar o fechamento na planilha. " +
+                    "Atualize o resumo antes de tentar novamente.");
             return new VacationPeriodClosingPreview
             {
                 HasPlannedVacation = preview.HasPlannedVacation, HasGuardado = preview.HasGuardado,
@@ -131,6 +164,23 @@ public partial class GoogleSheetsService
         var confirmed = (reviewed ?? Array.Empty<string>()).Select(name => (name ?? "").Trim())
             .Where(name => name.Length > 0).ToList();
         return confirmed.Count == expected.Count && confirmed.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(expected);
+    }
+
+    internal static bool ClosingAdjustmentMatches(IList<IList<object>> rows,
+        IReadOnlyList<ClosingAdjustedRow> adjustedRows, decimal actualBalance, decimal projectedBalance) =>
+        actualBalance == projectedBalance && adjustedRows.All(adjusted =>
+            adjusted.RowIndex < rows.Count &&
+            string.Equals(rows[adjusted.RowIndex].ElementAtOrDefault(0)?.ToString()?.Trim(),
+                adjusted.Id, StringComparison.Ordinal) &&
+            ParseClosingAmount(rows[adjusted.RowIndex].ElementAtOrDefault(5)?.ToString()) == adjusted.Amount);
+
+    private static decimal ParseClosingAmount(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return 0;
+        value = value.Replace("R$", "").Trim().Replace(" ", "");
+        if (value.Contains(',')) value = value.Replace(".", "").Replace(',', '.');
+        return decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var amount)
+            ? amount : decimal.MinValue;
     }
 
     private static int ClosingTypePriority(string type) => type.Trim().ToLowerInvariant() switch
@@ -272,6 +322,7 @@ public partial class GoogleSheetsService
 
         var fixedRows = ReadData("Fixos!A1:H") ?? Array.Empty<IList<object>>();
         var guardado = fixedRows.Skip(1).Select((row, index) => new ClosingFixedRow(index + 1,
+                row.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "",
                 row.ElementAtOrDefault(1)?.ToString()?.Trim() ?? "", ParseDecimal(row.ElementAtOrDefault(5)?.ToString())))
             .Where(item => item.Amount > 0 && ClosingTypePriority(item.Type) < 3 &&
                 string.Equals(fixedRows[item.RowIndex].ElementAtOrDefault(2)?.ToString()?.Trim(), period, StringComparison.OrdinalIgnoreCase) &&

@@ -387,6 +387,25 @@ Equal(true, GoogleSheetsService.SameReviewedCards(new[] { new VacationPeriodClos
     new[] { "itau" }), "conferência completa aceita nome do cartão sem diferenciar caixa");
 Equal(false, GoogleSheetsService.SameReviewedCards(new[] { new VacationPeriodClosingCard { Name = "ITAU" } },
     new[] { "ITAU", "ITAU" }), "cartão duplicado não passa pela conferência");
+var closingRows = new List<IList<object>>
+{
+    new List<object> { "Id", "Tipo", "MesAno", "Pessoa", "Vencimento", "Valor" },
+    new List<object> { "1781880861252", "Guardado", "09/2026", "Camila", "2026-10-15", "3000.00" }
+};
+var expectedClosingRows = new[] { new GoogleSheetsService.ClosingAdjustedRow(1, "1781880861252", 1639.42m) };
+Equal(false, GoogleSheetsService.ClosingAdjustmentMatches(closingRows, expectedClosingRows, -1160.58m, 200m),
+    "fechamento não pode ser confirmado quando Guardado e saldo não mudaram");
+closingRows[1][5] = "1639.42";
+Equal(true, GoogleSheetsService.ClosingAdjustmentMatches(closingRows, expectedClosingRows, 200m, 200m),
+    "fechamento aceita ajuste de Guardado confirmado na planilha");
+closingRows[1][5] = "1.639,42";
+Equal(true, GoogleSheetsService.ClosingAdjustmentMatches(closingRows, expectedClosingRows, 200m, 200m),
+    "fechamento aceita valor formatado em português na planilha");
+Equal(false, GoogleSheetsService.ClosingAdjustmentMatches(closingRows, expectedClosingRows, -1160.58m, 200m),
+    "fechamento exige saldo projetado confirmado");
+closingRows[1][0] = "outra-linha";
+Equal(false, GoogleSheetsService.ClosingAdjustmentMatches(closingRows, expectedClosingRows, 200m, 200m),
+    "fechamento não aceita ajuste de outra linha");
 var closingConfig = Enumerable.Repeat<object>("", 12).ToList();
 closingConfig[0] = "Camila";
 closingConfig[3] = "09/2026";
