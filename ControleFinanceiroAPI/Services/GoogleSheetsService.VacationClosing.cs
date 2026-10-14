@@ -28,10 +28,28 @@ public partial class GoogleSheetsService
             if (preview.CurrentBalance != request.ExpectedBalance ||
                 preview.ReductionNeeded != request.ExpectedReduction)
                 throw new InvalidOperationException("Os valores mudaram. Atualize o resumo e confira o fechamento novamente.");
+            if (!SameReviewedCards(preview.CardsToReview, request.ReviewedCards))
+                throw new InvalidOperationException("Confira todas as faturas dos cartões antes de fechar o período.");
 
             var sheet = _service.Spreadsheets.Get(SpreadsheetId).Execute();
             var fixedSheetId = sheet.Sheets.First(item => item.Properties.Title == "Fixos").Properties.SheetId;
-            var vacationSheetId = sheet.Sheets.First(item => item.Properties.Title == "Ferias").Properties.SheetId;
+            var vacationSheetId = state.Plans.Count > 0
+                ? sheet.Sheets.First(item => item.Properties.Title == "Ferias").Properties.SheetId : null;
+            var closingSheetId = sheet.Sheets.FirstOrDefault(item => item.Properties.Title == "FechamentosPeriodos")?.Properties.SheetId;
+            if (closingSheetId == null)
+            {
+                var created = _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest
+                {
+                    Requests = new List<Request> { new() { AddSheet = new AddSheetRequest
+                    { Properties = new SheetProperties { Title = "FechamentosPeriodos" } } } }
+                }, SpreadsheetId).Execute();
+                closingSheetId = created.Replies[0].AddSheet.Properties.SheetId;
+                var header = new ValueRange { Values = new List<IList<object>>
+                { new List<object> { "Pessoa", "Periodo", "FechadoEm", "CartoesConferidos" } } };
+                var update = _service.Spreadsheets.Values.Update(header, SpreadsheetId, "FechamentosPeriodos!A1:D1");
+                update.ValueInputOption = Google.Apis.Sheets.v4.SpreadsheetsResource.ValuesResource.UpdateRequest.ValueInputOptionEnum.RAW;
+                update.Execute();
+            }
             var requests = new List<Request>();
             var remaining = preview.ReductionNeeded;
             var plans = state.Plans.OrderBy(plan => plan.Start).ToList();
@@ -78,17 +96,41 @@ public partial class GoogleSheetsService
                     Fields = "userEnteredValue"
                 } });
             }
+            requests.Add(new Request { AppendCells = new AppendCellsRequest
+            {
+                SheetId = closingSheetId,
+                Rows = new List<RowData> { new() { Values = new List<CellData>
+                {
+                    new() { UserEnteredValue = new ExtendedValue { StringValue = request.Person.Trim() } },
+                    new() { UserEnteredValue = new ExtendedValue { StringValue = request.Period.Trim() } },
+                    new() { UserEnteredValue = new ExtendedValue { StringValue = DateTimeOffset.UtcNow.ToString("O") } },
+                    new() { UserEnteredValue = new ExtendedValue { StringValue = JsonSerializer.Serialize(preview.CardsToReview.Select(card => card.Name)) } }
+                } } },
+                Fields = "userEnteredValue"
+            } });
             _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest { Requests = requests }, SpreadsheetId).Execute();
             return new VacationPeriodClosingPreview
             {
-                HasPlannedVacation = true, IsClosed = true, CurrentBalance = preview.CurrentBalance,
+                HasPlannedVacation = preview.HasPlannedVacation, HasGuardado = preview.HasGuardado,
+                IsClosed = true, CurrentBalance = preview.CurrentBalance,
                 ReductionNeeded = preview.ReductionNeeded, AvailableGuardado = preview.AvailableGuardado,
                 ProjectedBalance = preview.ProjectedBalance,
                 TripReserveShortfall = plans.Sum(plan => plan.Person.TripReserveShortfall),
                 IncomeReserveShortfall = plans.Sum(plan => plan.Person.IncomeReserveShortfall),
-                Message = "Período fechado. As reservas de férias foram atualizadas."
+                CardsToReview = preview.CardsToReview,
+                Message = preview.HasPlannedVacation
+                    ? "Período fechado. As reservas de férias foram atualizadas."
+                    : "Período fechado. O Guardado foi ajustado, se necessário."
             };
         }
+    }
+
+    internal static bool SameReviewedCards(IReadOnlyList<VacationPeriodClosingCard> cards, IReadOnlyList<string>? reviewed)
+    {
+        var expected = cards.Select(card => card.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var confirmed = (reviewed ?? Array.Empty<string>()).Select(name => (name ?? "").Trim())
+            .Where(name => name.Length > 0).ToList();
+        return confirmed.Count == expected.Count && confirmed.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(expected);
     }
 
     private static int ClosingTypePriority(string type) => type.Trim().ToLowerInvariant() switch
@@ -100,6 +142,58 @@ public partial class GoogleSheetsService
     };
 
     internal static decimal RequiredGuardadoReduction(decimal balance) => Math.Max(0, 200m - balance);
+
+    internal static bool PeriodFinished(DateTime periodDate, DateTime today) => periodDate.AddDays(25) <= today.Date;
+
+    internal static bool CanClosePeriod(bool hasPlan, decimal available, bool alreadyClosed,
+        bool periodFinished, decimal reduction) =>
+        (hasPlan || available > 0) && !alreadyClosed && periodFinished && reduction <= available;
+
+    internal static List<VacationPeriodClosingCard> ClosingCardsForPeriod(string person, DateTime periodDate,
+        IList<IList<object>> configRows, IList<IList<object>> purchaseRows)
+    {
+        var names = new[] { "ITAU", "BRADESCO", "SANTANDER", "RIACHUELO", "C&A", "OUTROS" };
+        var configs = configRows.Select((row, index) => new
+            {
+                Row = row,
+                Index = index,
+                Person = row.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "",
+                Period = DateTime.TryParseExact(row.ElementAtOrDefault(3)?.ToString()?.Trim(), "MM/yyyy",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : DateTime.MinValue
+            })
+            .Where(item => string.Equals(item.Person, person, StringComparison.OrdinalIgnoreCase) &&
+                item.Period != DateTime.MinValue)
+            .OrderByDescending(item => item.Period <= periodDate)
+            .ThenBy(item => Math.Abs((item.Period.Year - periodDate.Year) * 12 + item.Period.Month - periodDate.Month))
+            .ThenByDescending(item => item.Index)
+            .ToList();
+        var cards = new Dictionary<string, VacationPeriodClosingCard>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < names.Length; index++)
+        {
+            var day = configs.Select(item => item.Row.ElementAtOrDefault(index + 6)?.ToString())
+                .Select(value => int.TryParse(value, out var parsed) && parsed is >= 1 and <= 31 ? parsed : 0)
+                .FirstOrDefault(value => value > 0);
+            if (day == 0) continue;
+            var nextMonth = periodDate.AddMonths(1);
+            cards[names[index]] = new VacationPeriodClosingCard
+            {
+                Name = names[index],
+                ClosingDate = new DateTime(nextMonth.Year, nextMonth.Month,
+                    Math.Min(day, DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month)))
+            };
+        }
+        foreach (var row in purchaseRows)
+        {
+            if (!string.Equals(row.ElementAtOrDefault(5)?.ToString()?.Trim(), periodDate.ToString("MM/yyyy"), StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.ElementAtOrDefault(7)?.ToString()?.Trim(), person, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var name = RemoverPalavras(row.ElementAtOrDefault(9)?.ToString()?.Trim() ?? "").ToUpperInvariant();
+            if (name.Length > 0 && !cards.ContainsKey(name))
+                cards[name] = new VacationPeriodClosingCard { Name = name };
+        }
+        return cards.Values.OrderBy(card => card.ClosingDate ?? DateTime.MaxValue)
+            .ThenBy(card => card.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
 
     private static void AssignVacationReserveReduction(List<ClosingPlan> plans, decimal amount, bool income)
     {
@@ -147,7 +241,19 @@ public partial class GoogleSheetsService
 
         var planRows = VacationRows();
         var plans = new List<ClosingPlan>();
-        var alreadyClosed = false;
+        var spreadsheet = _service.Spreadsheets.Get(SpreadsheetId).Execute();
+        var closingRows = spreadsheet.Sheets.Any(item => item.Properties.Title == "FechamentosPeriodos")
+            ? ReadData("FechamentosPeriodos!A1:D") ?? Array.Empty<IList<object>>() : Array.Empty<IList<object>>();
+        if (spreadsheet.Sheets.Any(item => item.Properties.Title == "FechamentosPeriodos") &&
+            (closingRows.Count == 0 ||
+             closingRows[0].ElementAtOrDefault(0)?.ToString() != "Pessoa" ||
+             closingRows[0].ElementAtOrDefault(1)?.ToString() != "Periodo" ||
+             closingRows[0].ElementAtOrDefault(2)?.ToString() != "FechadoEm" ||
+             closingRows[0].ElementAtOrDefault(3)?.ToString() != "CartoesConferidos"))
+            throw new InvalidOperationException("A aba FechamentosPeriodos já existe com colunas diferentes das esperadas.");
+        var alreadyClosed = closingRows.Skip(1).Any(row =>
+            string.Equals(row.ElementAtOrDefault(0)?.ToString()?.Trim(), person, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(row.ElementAtOrDefault(1)?.ToString()?.Trim(), period, StringComparison.OrdinalIgnoreCase));
         for (var index = 1; index < planRows.Count; index++)
         {
             var row = planRows[index];
@@ -175,17 +281,20 @@ public partial class GoogleSheetsService
             string.Equals(row.ElementAtOrDefault(2)?.ToString()?.Trim(), period, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(row.ElementAtOrDefault(3)?.ToString()?.Trim(), person, StringComparison.OrdinalIgnoreCase))
             .Sum(row => ParseDecimal(row.ElementAtOrDefault(5)?.ToString()));
-        var config = (ReadData("Config!A1:F") ?? Array.Empty<IList<object>>()).Skip(1).Where(row =>
+        var configRows = (ReadData("Config!A1:L") ?? Array.Empty<IList<object>>()).Skip(1).ToList();
+        var config = configRows.Where(row =>
             string.Equals(row.ElementAtOrDefault(0)?.ToString()?.Trim(), person, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(row.ElementAtOrDefault(3)?.ToString()?.Trim(), period, StringComparison.OrdinalIgnoreCase)).ToList();
         var salary = config.Where(row => string.Equals(row.ElementAtOrDefault(1)?.ToString()?.Trim(), "Salario", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(row.ElementAtOrDefault(1)?.ToString()?.Trim(), "Salário", StringComparison.OrdinalIgnoreCase))
             .Sum(row => ParseDecimal(row.ElementAtOrDefault(2)?.ToString()));
         var extras = config.Sum(row => ParseDecimal(row.ElementAtOrDefault(5)?.ToString()));
-        var purchases = (ReadData("Controle!A1:J") ?? Array.Empty<IList<object>>()).Skip(1).Where(row =>
+        var purchaseRows = (ReadData("Controle!A1:J") ?? Array.Empty<IList<object>>()).Skip(1).ToList();
+        var purchases = purchaseRows.Where(row =>
             string.Equals(row.ElementAtOrDefault(5)?.ToString()?.Trim(), period, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(row.ElementAtOrDefault(7)?.ToString()?.Trim(), person, StringComparison.OrdinalIgnoreCase))
             .Sum(row => ParseDecimal(row.ElementAtOrDefault(4)?.ToString()));
+        var cardsToReview = ClosingCardsForPeriod(person, periodDate, configRows, purchaseRows);
         var (losses, coverage) = ReadVacationIncomeAdjustments();
         var key = (person.ToUpperInvariant(), period);
         var balance = Math.Max(0, salary - losses.GetValueOrDefault(key)) + extras + coverage.GetValueOrDefault(key)
@@ -193,20 +302,22 @@ public partial class GoogleSheetsService
         var reduction = RequiredGuardadoReduction(balance);
         var available = guardado.Sum(row => row.Amount);
         var hasPlan = plans.Count > 0;
-        var periodFinished = periodDate.AddDays(24) <= VacationPlanningService.TodayBrazil;
-        var canClose = hasPlan && !alreadyClosed && periodFinished && reduction <= available;
-        var message = !hasPlan ? "Disponível apenas para quem tem férias programadas após este período."
-            : alreadyClosed ? "Este período já foi fechado para as férias programadas."
+        var periodFinished = PeriodFinished(periodDate, VacationPlanningService.TodayBrazil);
+        var canClose = CanClosePeriod(hasPlan, available, alreadyClosed, periodFinished, reduction);
+        var message = alreadyClosed ? "Este período já foi fechado."
+            : !hasPlan && available <= 0 ? "Disponível quando houver Guardado ou férias programadas."
             : !periodFinished ? "Aguarde o fim do período para conferir as faturas e fechá-lo."
             : reduction > available ? "O Guardado não é suficiente para manter R$ 200 de saldo neste período."
             : null;
         return new ClosingState(new VacationPeriodClosingPreview
         {
-            HasPlannedVacation = hasPlan, IsClosed = alreadyClosed, CanClose = canClose,
+            HasPlannedVacation = hasPlan, HasGuardado = available > 0,
+            IsClosed = alreadyClosed, CanClose = canClose,
             CurrentBalance = balance, ReductionNeeded = reduction, AvailableGuardado = available,
             ProjectedBalance = balance + Math.Min(reduction, available),
             TripReserveShortfall = plans.Sum(plan => plan.Person.TripReserveShortfall),
             IncomeReserveShortfall = plans.Sum(plan => plan.Person.IncomeReserveShortfall),
+            CardsToReview = cardsToReview,
             Message = message
         }, plans, guardado);
     }

@@ -65,6 +65,7 @@ public sealed class VacationPersonPreview
 public sealed class VacationPeriodClosingPreview
 {
     public bool HasPlannedVacation { get; set; }
+    public bool HasGuardado { get; set; }
     public bool IsClosed { get; set; }
     public bool CanClose { get; set; }
     public decimal CurrentBalance { get; set; }
@@ -73,7 +74,14 @@ public sealed class VacationPeriodClosingPreview
     public decimal ProjectedBalance { get; set; }
     public decimal TripReserveShortfall { get; set; }
     public decimal IncomeReserveShortfall { get; set; }
+    public List<VacationPeriodClosingCard> CardsToReview { get; set; } = new();
     public string? Message { get; set; }
+}
+
+public sealed class VacationPeriodClosingCard
+{
+    public string Name { get; set; } = string.Empty;
+    public DateTime? ClosingDate { get; set; }
 }
 
 public sealed class VacationPeriodClosingRequest
@@ -82,6 +90,7 @@ public sealed class VacationPeriodClosingRequest
     public string Period { get; set; } = string.Empty;
     public decimal ExpectedBalance { get; set; }
     public decimal ExpectedReduction { get; set; }
+    public List<string> ReviewedCards { get; set; } = new();
 }
 
 public sealed class VacationOptionPreview

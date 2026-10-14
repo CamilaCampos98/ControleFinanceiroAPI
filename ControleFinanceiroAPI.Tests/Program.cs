@@ -371,6 +371,38 @@ var firstTrip = new VacationPersonPreview
 Equal(0m, GoogleSheetsService.RequiredGuardadoReduction(350m), "saldo acima do mínimo não reduz Guardado");
 Equal(150m, GoogleSheetsService.RequiredGuardadoReduction(50m), "ajuste mantém R$ 200");
 Equal(700m, GoogleSheetsService.RequiredGuardadoReduction(-500m), "saldo negativo requer cobertura até R$ 200");
+Equal(false, GoogleSheetsService.PeriodFinished(new DateTime(2026, 10, 1), new DateTime(2026, 10, 25)),
+    "período 10/2026 ainda não terminou em 25/10");
+Equal(true, GoogleSheetsService.PeriodFinished(new DateTime(2026, 10, 1), new DateTime(2026, 10, 26)),
+    "período 10/2026 libera no dia 26/10");
+Equal(true, GoogleSheetsService.CanClosePeriod(false, 3000m, false, true, 251.10m),
+    "Guardado permite fechamento mesmo sem férias");
+Equal(true, GoogleSheetsService.CanClosePeriod(true, 0m, false, true, 0m),
+    "férias permitem fechamento sem Guardado quando não há ajuste");
+Equal(false, GoogleSheetsService.CanClosePeriod(false, 0m, false, true, 0m),
+    "sem Guardado e sem férias não há fechamento");
+Equal(false, GoogleSheetsService.SameReviewedCards(new[] { new VacationPeriodClosingCard { Name = "ITAU" } },
+    Array.Empty<string>()), "sem conferência do cartão não pode fechar");
+Equal(true, GoogleSheetsService.SameReviewedCards(new[] { new VacationPeriodClosingCard { Name = "ITAU" } },
+    new[] { "itau" }), "conferência completa aceita nome do cartão sem diferenciar caixa");
+Equal(false, GoogleSheetsService.SameReviewedCards(new[] { new VacationPeriodClosingCard { Name = "ITAU" } },
+    new[] { "ITAU", "ITAU" }), "cartão duplicado não passa pela conferência");
+var closingConfig = Enumerable.Repeat<object>("", 12).ToList();
+closingConfig[0] = "Camila";
+closingConfig[3] = "09/2026";
+closingConfig[6] = "7";
+closingConfig[8] = "15";
+var closingPurchase = Enumerable.Repeat<object>("", 10).ToList();
+closingPurchase[5] = "09/2026";
+closingPurchase[7] = "Camila";
+closingPurchase[9] = "Bradesco Titular";
+var cardsToReview = GoogleSheetsService.ClosingCardsForPeriod("Camila", new DateTime(2026, 9, 1),
+    new List<IList<object>> { closingConfig }, new List<IList<object>> { closingPurchase });
+Equal(3, cardsToReview.Count, "conferência inclui cartões configurados e cartão com compra");
+Equal(new DateTime(2026, 10, 7), cardsToReview.Single(card => card.Name == "ITAU").ClosingDate,
+    "conferência mostra fechamento previsto da fatura");
+Equal(true, cardsToReview.Any(card => card.Name == "BRADESCO"),
+    "compra sem data de fechamento ainda exige conferência");
 var secondTrip = new VacationPersonPreview
 {
     Person = "Camila", BudgetShare = 400m,
