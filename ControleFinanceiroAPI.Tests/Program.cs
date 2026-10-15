@@ -96,8 +96,34 @@ Equal(323.34m, underpaid.Single(item => item.Id == "nov").Amount,
 Equal(originalPlanned, paymentSnapshot.Installments.Sum(item =>
     underpaid.FirstOrDefault(updated => updated.Id == item.Id)?.Amount ?? item.Amount),
     "pagamento menor preserva o total planejado");
-Equal(0, PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[2], 100m).Count,
-    "última parcela sem mês seguinte mantém saldo pendente");
+Equal(100m, PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[2], 100m)
+    .Single().Amount, "última parcela fica quitada pelo valor pago");
+var singleMonthSnapshot = new PartySnapshot
+{
+    Items = [new PartyItem("lembrancinhas", "livia", "Itens", "Lembrancinhas", 597m)],
+    Installments = [new PartyInstallment("outubro", "livia", "Itens", "lembrancinhas",
+        new DateTime(2026, 10, 15), 397m)],
+    Payments =
+    [
+        new PartyPayment("historico", "livia", "Itens", "lembrancinhas", null,
+            "Parcela 1 lembrancinhas", new DateTime(2026, 9, 15), 200m),
+        new PartyPayment("outubro-pago", "livia", "Itens", "lembrancinhas", "outubro",
+            "Parcela 2 lembrancinhas (pagamento parcial)", new DateTime(2026, 10, 15), 100m)
+    ]
+};
+var correctedOctober = PartyInstallmentPaymentPlanner.ReallocateExisting(singleMonthSnapshot);
+Equal(100m, correctedOctober.Single().Amount, "parcela antiga de outubro passa de R$ 397 para R$ 100");
+Equal(0, PartyInstallmentPaymentPlanner.ReallocateExisting(new PartySnapshot
+{
+    Installments = [correctedOctober.Single()],
+    Payments = singleMonthSnapshot.Payments
+}).Count, "correção da planilha não se repete ao reabrir a festa");
+Equal(297m, PartyBalanceCalculator.Unplanned(new PartySnapshot
+{
+    Items = singleMonthSnapshot.Items,
+    Payments = singleMonthSnapshot.Payments,
+    Installments = [correctedOctober.Single()]
+}, "Itens", "lembrancinhas"), "R$ 297 restantes ficam a planejar");
 paymentSnapshot.Payments.Add(new PartyPayment("pago-out", "livia", "Salão", null, "out",
     "Parcela 2 salão (pagamento parcial)", new DateTime(2026, 10, 15), 100m));
 var existingUnderpayment = PartyInstallmentPaymentPlanner.ReallocateExisting(paymentSnapshot);

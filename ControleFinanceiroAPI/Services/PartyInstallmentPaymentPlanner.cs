@@ -19,7 +19,8 @@ public static class PartyInstallmentPaymentPlanner
         var future = Future(snapshot.Installments, installment).ToList();
         if (difference < 0)
         {
-            if (future.Count == 0) return Array.Empty<PartyInstallment>();
+            if (future.Count == 0)
+                return [installment with { Amount = paid + amount }];
             return
             [
                 installment with { Amount = paid + amount },
@@ -60,10 +61,10 @@ public static class PartyInstallmentPaymentPlanner
                 .Sum(payment => payment.Amount);
             if (paid <= 0 || paid >= current.Amount) continue;
             var next = Future(adjusted.Values, current).FirstOrDefault();
-            if (next == null) continue;
             var difference = current.Amount - paid;
             adjusted[current.Id] = current with { Amount = paid };
-            adjusted[next.Id] = next with { Amount = next.Amount + difference };
+            if (next != null)
+                adjusted[next.Id] = next with { Amount = next.Amount + difference };
         }
         return adjusted.Values.Where(item => item.Amount != snapshot.Installments
             .First(original => original.Id == item.Id).Amount).ToList();
