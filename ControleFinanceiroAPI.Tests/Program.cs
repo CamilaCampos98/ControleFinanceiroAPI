@@ -68,6 +68,42 @@ Equal("Parcela 2 lembrancinhas", PartyPaymentNaming.Describe(namingSnapshot, nam
     "próxima parcela das lembrancinhas continua a numeração importada");
 Equal("Parcela 2 salão (pagamento parcial)", PartyPaymentNaming.Describe(namingSnapshot, namedSalon, 100m),
     "pagamento parcial fica identificado no histórico");
+Equal("Parcela 2 salão", PartyPaymentNaming.Describe(namingSnapshot, namedSalon, 161.67m, 100m),
+    "quitação após pagamento parcial não continua marcada como parcial");
+
+var paymentSnapshot = new PartySnapshot
+{
+    Installments =
+    [
+        new PartyInstallment("out", "livia", "Salão", null, new DateTime(2026, 10, 15), 261.67m),
+        new PartyInstallment("nov", "livia", "Salão", null, new DateTime(2026, 11, 15), 261.67m),
+        new PartyInstallment("dez", "livia", "Salão", null, new DateTime(2026, 12, 15), 261.67m),
+        new PartyInstallment("outro-item", "livia", "Itens", "lembrancinhas", new DateTime(2026, 11, 15), 132.34m)
+    ]
+};
+var originalPlanned = paymentSnapshot.Installments.Sum(item => item.Amount);
+var reallocated = PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 300m);
+Equal(300m, reallocated.Single(item => item.Id == "out").Amount, "histórico pode registrar R$ 300");
+Equal(223.34m, reallocated.Single(item => item.Id == "nov").Amount, "excedente abate novembro");
+Equal(originalPlanned, paymentSnapshot.Installments.Sum(item =>
+    reallocated.FirstOrDefault(updated => updated.Id == item.Id)?.Amount ?? item.Amount),
+    "pagamento maior não aumenta o total planejado");
+Equal(0, PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 200m).Count,
+    "pagamento menor mantém saldo na parcela atual");
+var spanning = PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 600m);
+Equal(0m, spanning.Single(item => item.Id == "nov").Amount, "excedente quita próxima parcela");
+Equal(185.01m, spanning.Single(item => item.Id == "dez").Amount, "excedente restante abate parcela seguinte");
+paymentSnapshot.Payments.Add(new PartyPayment("pago-nov", "livia", "Salão", null, "nov", "Parcial",
+    new DateTime(2026, 10, 15), 100m));
+var withPaidFuture = PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 500m);
+Equal(100m, withPaidFuture.Single(item => item.Id == "nov").Amount,
+    "abatimento não apaga pagamento já registrado na parcela seguinte");
+try
+{
+    PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 1000m);
+    throw new Exception("pagamento acima do saldo do item deveria ser recusado");
+}
+catch (ArgumentException) { }
 
 Equal("09/2026", VacationPlanningService.SalaryPeriod(new DateTime(2026, 9, 25)).ToString("MM/yyyy"), "dia 25 pertence ao período atual");
 Equal("10/2026", VacationPlanningService.SalaryPeriod(new DateTime(2026, 9, 26)).ToString("MM/yyyy"), "dia 26 muda o período");
