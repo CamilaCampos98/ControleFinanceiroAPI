@@ -88,8 +88,30 @@ Equal(223.34m, reallocated.Single(item => item.Id == "nov").Amount, "excedente a
 Equal(originalPlanned, paymentSnapshot.Installments.Sum(item =>
     reallocated.FirstOrDefault(updated => updated.Id == item.Id)?.Amount ?? item.Amount),
     "pagamento maior não aumenta o total planejado");
-Equal(0, PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 200m).Count,
-    "pagamento menor mantém saldo na parcela atual");
+var underpaid = PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 200m);
+Equal(200m, underpaid.Single(item => item.Id == "out").Amount,
+    "pagamento menor quita a parcela do mês pelo valor efetivamente pago");
+Equal(323.34m, underpaid.Single(item => item.Id == "nov").Amount,
+    "diferença do pagamento menor passa para o mês seguinte");
+Equal(originalPlanned, paymentSnapshot.Installments.Sum(item =>
+    underpaid.FirstOrDefault(updated => updated.Id == item.Id)?.Amount ?? item.Amount),
+    "pagamento menor preserva o total planejado");
+Equal(0, PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[2], 100m).Count,
+    "última parcela sem mês seguinte mantém saldo pendente");
+paymentSnapshot.Payments.Add(new PartyPayment("pago-out", "livia", "Salão", null, "out",
+    "Parcela 2 salão (pagamento parcial)", new DateTime(2026, 10, 15), 100m));
+var existingUnderpayment = PartyInstallmentPaymentPlanner.ReallocateExisting(paymentSnapshot);
+Equal(100m, existingUnderpayment.Single(item => item.Id == "out").Amount,
+    "pagamento antigo de R$ 100 quita outubro");
+Equal(423.34m, existingUnderpayment.Single(item => item.Id == "nov").Amount,
+    "pagamento antigo transfere diferença para novembro");
+Equal(0, PartyInstallmentPaymentPlanner.ReallocateExisting(new PartySnapshot
+{
+    Installments = paymentSnapshot.Installments.Select(item =>
+        existingUnderpayment.FirstOrDefault(updated => updated.Id == item.Id) ?? item).ToList(),
+    Payments = paymentSnapshot.Payments
+}).Count, "ajuste de pagamento antigo é idempotente");
+paymentSnapshot.Payments.RemoveAt(paymentSnapshot.Payments.Count - 1);
 var spanning = PartyInstallmentPaymentPlanner.Reallocate(paymentSnapshot, paymentSnapshot.Installments[0], 600m);
 Equal(0m, spanning.Single(item => item.Id == "nov").Amount, "excedente quita próxima parcela");
 Equal(185.01m, spanning.Single(item => item.Id == "dez").Amount, "excedente restante abate parcela seguinte");

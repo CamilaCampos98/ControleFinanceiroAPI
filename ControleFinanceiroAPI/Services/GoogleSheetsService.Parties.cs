@@ -43,6 +43,26 @@ public partial class GoogleSheetsService
                 .Select(row => new PartyPayment(Cell(row, 0), Cell(row, 1), Cell(row, 2), EmptyToNull(Cell(row, 3)),
                     EmptyToNull(Cell(row, 4)), Cell(row, 5), ParsePartyDate(Cell(row, 6)), ParsePartyMoney(Cell(row, 7)))).ToList();
             var snapshot = new PartySnapshot { Event = party, Items = items, Installments = installments, Payments = payments };
+            var adjusted = ControleFinanceiroAPI.Services.PartyInstallmentPaymentPlanner.ReallocateExisting(snapshot);
+            if (adjusted.Count > 0)
+            {
+                var requests = PartyInstallmentAmountUpdates(tabs, data[PartyInstallmentsSheet], adjusted);
+                foreach (var current in adjusted.Where(item => installments.Any(original => original.Id == item.Id &&
+                             original.Amount > item.Amount) && payments.Any(payment => payment.InstallmentId == item.Id)))
+                {
+                    var lastPayment = payments.Where(payment => payment.InstallmentId == current.Id)
+                        .OrderBy(payment => payment.PaidAt).Last();
+                    const string partialSuffix = " (pagamento parcial)";
+                    if (!lastPayment.Description.EndsWith(partialSuffix, StringComparison.Ordinal)) continue;
+                    var paymentRowIndex = data[PartyPaymentsSheet].FindIndex(row => Cell(row, 0) == lastPayment.Id);
+                    if (paymentRowIndex < 1) continue;
+                    requests.Add(PartyCellUpdate(tabs[PartyPaymentsSheet], paymentRowIndex, 5,
+                        lastPayment.Description[..^partialSuffix.Length]));
+                }
+                _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest { Requests = requests }, SpreadsheetId)
+                    .Execute();
+                return ReadParty();
+            }
             var labeledPayments = payments.Select(payment =>
             {
                 var installment = installments.FirstOrDefault(item => item.Id == payment.InstallmentId);
@@ -212,25 +232,7 @@ public partial class GoogleSheetsService
                 installment.ItemId, installment.Id, description, paidAt.Date, amount);
             var tabs = PartyTabIds();
             var rows = PartyRows(PartyInstallmentsSheet, tabs);
-            var requests = adjustedInstallments.Select(item =>
-            {
-                var rowIndex = rows.FindIndex(row => Cell(row, 0) == item.Id);
-                if (rowIndex < 1) throw new InvalidOperationException("Parcela não encontrada na planilha.");
-                return new Request
-                {
-                    RepeatCell = new RepeatCellRequest
-                    {
-                        Range = new GridRange
-                        {
-                            SheetId = tabs[PartyInstallmentsSheet],
-                            StartRowIndex = rowIndex, EndRowIndex = rowIndex + 1,
-                            StartColumnIndex = 5, EndColumnIndex = 6
-                        },
-                        Cell = new CellData { UserEnteredValue = new ExtendedValue { StringValue = PartyMoney(item.Amount) } },
-                        Fields = "userEnteredValue"
-                    }
-                };
-            }).ToList();
+            var requests = PartyInstallmentAmountUpdates(tabs, rows, adjustedInstallments);
             requests.Add(new Request
             {
                 AppendCells = new AppendCellsRequest
@@ -342,6 +344,28 @@ public partial class GoogleSheetsService
         }).ToList();
         _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest { Requests = requests }, SpreadsheetId).Execute();
     }
+
+    private static List<Request> PartyInstallmentAmountUpdates(Dictionary<string, int> tabs,
+        List<IList<object>> rows, IReadOnlyList<PartyInstallment> installments) => installments.Select(item =>
+    {
+        var rowIndex = rows.FindIndex(row => Cell(row, 0) == item.Id);
+        if (rowIndex < 1) throw new InvalidOperationException("Parcela não encontrada na planilha.");
+        return PartyCellUpdate(tabs[PartyInstallmentsSheet], rowIndex, 5, PartyMoney(item.Amount));
+    }).ToList();
+
+    private static Request PartyCellUpdate(int sheetId, int rowIndex, int columnIndex, string value) => new()
+    {
+        RepeatCell = new RepeatCellRequest
+        {
+            Range = new GridRange
+            {
+                SheetId = sheetId, StartRowIndex = rowIndex, EndRowIndex = rowIndex + 1,
+                StartColumnIndex = columnIndex, EndColumnIndex = columnIndex + 1
+            },
+            Cell = new CellData { UserEnteredValue = new ExtendedValue { StringValue = value } },
+            Fields = "userEnteredValue"
+        }
+    };
 
     private static IList<object> PartyEventRow(PartyEvent item) => [item.Id, item.Name, PartyDate(item.Date)];
     private static IList<object> PartyItemRow(PartyItem item) =>
