@@ -9,14 +9,18 @@ public partial class GoogleSheetsService
     private const string PartyItemsSheet = "FestaItens";
     private const string PartyInstallmentsSheet = "FestaParcelas";
     private const string PartyPaymentsSheet = "FestaPagamentos";
+    private const string PartyGuestsSheet = "FestaConvidados";
+    private const string PartyHousesSheet = "FestaCasas";
     private const string LiviaPartyId = "livia-1-ano-2027";
 
     private static readonly Dictionary<string, string[]> PartyHeaders = new()
     {
-        [PartyEventsSheet] = ["Id", "Nome", "Data"],
+        [PartyEventsSheet] = ["Id", "Nome", "Data", "LembrancinhasMeninos", "LembrancinhasMeninas", "LembrancinhasAdultos"],
         [PartyItemsSheet] = ["Id", "FestaId", "Categoria", "Item", "Valor"],
         [PartyInstallmentsSheet] = ["Id", "FestaId", "Categoria", "ItemId", "Vencimento", "Valor"],
-        [PartyPaymentsSheet] = ["Id", "FestaId", "Categoria", "ItemId", "ParcelaId", "Descricao", "DataPagamento", "Valor"]
+        [PartyPaymentsSheet] = ["Id", "FestaId", "Categoria", "ItemId", "ParcelaId", "Descricao", "DataPagamento", "Valor"],
+        [PartyGuestsSheet] = ["Id", "FestaId", "Nome", "Crianca", "Genero", "Observacoes", "CriadoEm", "AtualizadoEm", "CasaId"],
+        [PartyHousesSheet] = ["Id", "FestaId", "Nome", "CriadoEm", "AtualizadoEm"]
     };
 
     public PartySnapshot ReadParty()
@@ -27,7 +31,8 @@ public partial class GoogleSheetsService
             if (!tabs.ContainsKey(PartyEventsSheet)) return new PartySnapshot();
             var data = ReadPartyBatch(tabs);
             var events = data[PartyEventsSheet];
-            var party = events.Skip(1).Select(row => new PartyEvent(Cell(row, 0), Cell(row, 1), ParsePartyDate(Cell(row, 2))))
+            var party = events.Skip(1).Select(row => new PartyEvent(Cell(row, 0), Cell(row, 1), ParsePartyDate(Cell(row, 2)),
+                    ParsePartyCount(Cell(row, 3)), ParsePartyCount(Cell(row, 4)), ParsePartyCount(Cell(row, 5))))
                 .FirstOrDefault(item => item.Id == LiviaPartyId);
             if (party == null) return new PartySnapshot();
             var items = data[PartyItemsSheet].Skip(1)
@@ -42,7 +47,16 @@ public partial class GoogleSheetsService
                 .Where(row => Cell(row, 1) == party.Id)
                 .Select(row => new PartyPayment(Cell(row, 0), Cell(row, 1), Cell(row, 2), EmptyToNull(Cell(row, 3)),
                     EmptyToNull(Cell(row, 4)), Cell(row, 5), ParsePartyDate(Cell(row, 6)), ParsePartyMoney(Cell(row, 7)))).ToList();
-            var snapshot = new PartySnapshot { Event = party, Items = items, Installments = installments, Payments = payments };
+            var guests = data[PartyGuestsSheet].Skip(1)
+                .Where(row => Cell(row, 1) == party.Id && !string.IsNullOrWhiteSpace(Cell(row, 2)))
+                .Select(row => new PartyGuest(Cell(row, 0), Cell(row, 1), Cell(row, 2),
+                    Cell(row, 3).Equals("Sim", StringComparison.OrdinalIgnoreCase), Cell(row, 4), Cell(row, 5),
+                    Cell(row, 6), Cell(row, 7), Cell(row, 8))).ToList();
+            var houses = data[PartyHousesSheet].Skip(1)
+                .Where(row => Cell(row, 1) == party.Id && !string.IsNullOrWhiteSpace(Cell(row, 2)))
+                .Select(row => new PartyHouse(Cell(row, 0), Cell(row, 1), Cell(row, 2),
+                    Cell(row, 3), Cell(row, 4))).ToList();
+            var snapshot = new PartySnapshot { Event = party, Items = items, Installments = installments, Payments = payments, Guests = guests, Houses = houses };
             var adjusted = ControleFinanceiroAPI.Services.PartyInstallmentPaymentPlanner.ReallocateExisting(snapshot);
             if (adjusted.Count > 0)
             {
@@ -71,7 +85,7 @@ public partial class GoogleSheetsService
                     : payment with { Description = ControleFinanceiroAPI.Services.PartyPaymentNaming.Describe(
                         snapshot, installment, payment.Amount) };
             }).ToList();
-            return new PartySnapshot { Event = party, Items = items, Installments = installments, Payments = labeledPayments };
+            return new PartySnapshot { Event = party, Items = items, Installments = installments, Payments = labeledPayments, Guests = guests, Houses = houses };
         }
     }
 
@@ -129,6 +143,27 @@ public partial class GoogleSheetsService
             var tabs = PartyTabIds();
             var item = new PartyItem(Guid.NewGuid().ToString("N"), snapshot.Event!.Id, category, name, input.Amount);
             AppendPartyRows(tabs, (PartyItemsSheet, [PartyItemRow(item)]));
+            return ReadParty();
+        }
+    }
+
+    public PartySnapshot UpdatePartySouvenirOrder(PartySouvenirOrderInput input)
+    {
+        lock (_lockId)
+        {
+            var party = RequireParty().Event!;
+            if (input.BoysOrdered is < 0 or > 10000 || input.GirlsOrdered is < 0 or > 10000 ||
+                input.AdultsOrdered is < 0 or > 10000)
+                throw new ArgumentException("Informe quantidades encomendadas válidas.");
+            var tabs = EnsurePartyTabs();
+            var rowIndex = PartyRows(PartyEventsSheet, tabs).FindIndex(row => Cell(row, 0) == party.Id);
+            if (rowIndex < 1) throw new InvalidOperationException("Festa não encontrada na planilha.");
+            _service.Spreadsheets.BatchUpdate(new BatchUpdateSpreadsheetRequest
+            {
+                Requests = [PartyCountUpdate(tabs[PartyEventsSheet], rowIndex, 3, input.BoysOrdered),
+                    PartyCountUpdate(tabs[PartyEventsSheet], rowIndex, 4, input.GirlsOrdered),
+                    PartyCountUpdate(tabs[PartyEventsSheet], rowIndex, 5, input.AdultsOrdered)]
+            }, SpreadsheetId).Execute();
             return ReadParty();
         }
     }
@@ -367,7 +402,24 @@ public partial class GoogleSheetsService
         }
     };
 
-    private static IList<object> PartyEventRow(PartyEvent item) => [item.Id, item.Name, PartyDate(item.Date)];
+    private static Request PartyCountUpdate(int sheetId, int rowIndex, int columnIndex, int value) => new()
+    {
+        RepeatCell = new RepeatCellRequest
+        {
+            Range = new GridRange
+            {
+                SheetId = sheetId, StartRowIndex = rowIndex, EndRowIndex = rowIndex + 1,
+                StartColumnIndex = columnIndex, EndColumnIndex = columnIndex + 1
+            },
+            Cell = new CellData { UserEnteredValue = new ExtendedValue { NumberValue = value } },
+            Fields = "userEnteredValue"
+        }
+    };
+
+    private static IList<object> PartyEventRow(PartyEvent item) =>
+        [item.Id, item.Name, PartyDate(item.Date), item.BoysOrdered?.ToString(CultureInfo.InvariantCulture) ?? "",
+            item.GirlsOrdered?.ToString(CultureInfo.InvariantCulture) ?? "",
+            item.AdultsOrdered?.ToString(CultureInfo.InvariantCulture) ?? ""];
     private static IList<object> PartyItemRow(PartyItem item) =>
         [item.Id, item.EventId, item.Category, item.Name, PartyMoney(item.Amount)];
     private static IList<object> PartyInstallmentRow(PartyInstallment item) =>
@@ -381,4 +433,7 @@ public partial class GoogleSheetsService
     private static string? EmptyToNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
     private static DateTime ParsePartyDate(string value) => DateTime.ParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
     private static decimal ParsePartyMoney(string value) => decimal.Parse(value, CultureInfo.InvariantCulture);
+    private static int? ParsePartyCount(string value) => string.IsNullOrWhiteSpace(value) ? null :
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) && count >= 0
+            ? count : throw new InvalidOperationException("Quantidade de lembrancinhas inválida na aba Festas.");
 }
