@@ -632,6 +632,15 @@ namespace ControleFinanceiroAPI.Controllers
             return Ok(chaves);
         }
 
+        [HttpPost("ConferirImportacaoPluggy")]
+        public IActionResult ConferirImportacaoPluggy([FromBody] List<ParcelaPluggyConferencia> parcelas)
+        {
+            if (parcelas is null || parcelas.Count > 500)
+                return BadRequest("Lista de parcelas inválida.");
+
+            return Ok(_googleSheetsService.ConferirParcelasPluggy(parcelas));
+        }
+
         [HttpGet("PeriodoFatura")]
         public IActionResult GetPeriodoFatura(
        [FromQuery] string pessoa,

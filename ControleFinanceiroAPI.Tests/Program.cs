@@ -10,6 +10,30 @@ static void Equal<T>(T expected, T actual, string name)
 static int Weekdays(DateTime start, DateTime end) => Enumerable.Range(0, (end - start).Days + 1)
     .Count(offset => start.AddDays(offset).DayOfWeek is not DayOfWeek.Saturday and not DayOfWeek.Sunday);
 
+var conferencia = GoogleSheetsService.ConferirParcelasPluggy(
+    [
+        new("igual", new DateTime(2026, 10, 28), 160.18m, "Camila", "Itau Titular", "3/6", "Nome diferente"),
+        new("centavo", new DateTime(2026, 10, 28), 160.17m, "Camila", "Itau Titular", "3/6", "Airbnb"),
+        new("cartao", new DateTime(2026, 10, 18), 18.88m, "Diego", "Itau Adicional", "1/1", "Sams"),
+        new("ausente", new DateTime(2026, 10, 25), 100m, "Diego", "Itau Adicional", "1/1", "Prata Pura")
+    ],
+    [
+        new(1269, new DateTime(2026, 10, 28), 160.18m, "camila", "Itau Titular", "3/6", "Airbnb"),
+        new(1483, new DateTime(2026, 10, 18), 18.88m, "Diego", "Itau Titular", "", "Sams"),
+        new(1482, new DateTime(2026, 10, 18), 100m, "Diego", "Itau Adicional", "", "Abastecimento")
+    ]);
+Equal("Existente", conferencia[0].Status, "conferência exata sem depender da descrição");
+Equal("Revisar", conferencia[1].Status, "diferença de centavo exige revisão");
+Equal("CartaoDivergente", conferencia[2].Status, "cartão diferente exige revisão");
+Equal("NaoEncontrada", conferencia[3].Status, "compra sem correspondente aparente");
+var duplicidade = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("repetida", new DateTime(2026, 10, 8), 64.26m, "Camila", "Itau Titular", "2/9", "Shopee")],
+    [
+        new(1289, new DateTime(2026, 10, 8), 64.26m, "Camila", "Itau Titular", "2/9", "Shoppe"),
+        new(1319, new DateTime(2026, 10, 8), 64.26m, "Camila", "Itau Titular", "2/9", "Shoppe")
+    ]);
+Equal(2, duplicidade[0].QuantidadeCorrespondencias, "lançamentos repetidos na planilha são sinalizados");
+
 var salonInstallments = PartyScheduleCalculator.Split(1570m, 6, 0);
 Equal(6, salonInstallments.Count, "salão em seis meses");
 Equal(1570m, salonInstallments.Sum(), "salão sem perda de centavos");
