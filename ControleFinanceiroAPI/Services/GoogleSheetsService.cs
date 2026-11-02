@@ -135,18 +135,13 @@ public partial class GoogleSheetsService
             var parcelaInicial = Math.Clamp(compra.ParcelaInicial <= 0 ? 1 : compra.ParcelaInicial, 1, totalParcelas);
             var quantidadeParcelasParaInserir = totalParcelas - parcelaInicial + 1;
             var valorParcela = compra.ValorTotal / quantidadeParcelasParaInserir;
-
             for (int i = 0; i < quantidadeParcelasParaInserir; i++)
             {
                 var numeroParcela = parcelaInicial + i;
-                var dataParcela = compra.Data.AddMonths(i);
+                var dataParcela = GetInstallmentDate(compra, i);
                 var parcelaStr = totalParcelas > 1 ? $"{numeroParcela}/{totalParcelas}" : "";
 
-                var mesFaturaParcela = CalcularMesFatura(
-                                                        dataParcela,
-                                                        compra.Cartao,
-                                                        compra.Pessoa
-                                                    );
+                var mesFaturaParcela = CalcularMesFatura(dataParcela, compra.Cartao, compra.Pessoa);
 
                 linhas.Add(new List<object> {
                         compra.idLan,
@@ -183,6 +178,43 @@ public partial class GoogleSheetsService
         }
 
     }
+
+    public bool HasMatchingImportedInstallment(CompraModel compra)
+    {
+        var totalInstallments = Math.Max(1, compra.TotalParcelas);
+        var firstInstallment = Math.Clamp(compra.ParcelaInicial, 1, totalInstallments);
+        var remaining = totalInstallments - firstInstallment + 1;
+        var installmentAmount = compra.ValorTotal / remaining;
+        var expected = Enumerable.Range(0, remaining)
+            .Select(index => GetInstallmentDate(compra, index).Date)
+            .ToHashSet();
+
+        var rows = ReadData($"{SheetName}!A:J");
+        foreach (var row in rows.Skip(1))
+        {
+            if (!string.Equals(row.ElementAtOrDefault(7)?.ToString()?.Trim(), compra.Pessoa.Trim(),
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(row.ElementAtOrDefault(9)?.ToString()?.Trim(), compra.Cartao.Trim(),
+                    StringComparison.OrdinalIgnoreCase) ||
+                !DateTime.TryParseExact(row.ElementAtOrDefault(6)?.ToString()?.Trim(),
+                    ["yyyy-MM-dd", "dd/MM/yyyy"], CultureInfo.InvariantCulture, DateTimeStyles.None,
+                    out var existingDate) || !expected.Contains(existingDate.Date))
+                continue;
+
+            var amountText = row.ElementAtOrDefault(4)?.ToString() ?? "";
+            var culture = amountText.Contains(',') ? CultureInfo.GetCultureInfo("pt-BR") : CultureInfo.InvariantCulture;
+            if (decimal.TryParse(amountText, NumberStyles.Currency, culture, out var amount) &&
+                Math.Abs(amount - installmentAmount) <= 0.01m)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static DateTime GetInstallmentDate(CompraModel compra, int index) =>
+        compra.ImportacaoPluggy && compra.DataCompraOriginal is { } originalDate && compra.TotalParcelas > 1
+            ? originalDate.AddMonths(Math.Max(1, compra.ParcelaInicial) - 1 + index)
+            : compra.Data.AddMonths(index);
 
 
     public void TestConnection()

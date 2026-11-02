@@ -173,6 +173,10 @@ namespace ControleFinanceiroAPI.Controllers
             var result = _compraWorkflowService.RegistrarCompra(compra);
             return ToActionResult(result);
         }
+
+        [HttpGet("ImportacaoPluggyDisponivel")]
+        public IActionResult ImportacaoPluggyDisponivel() => Ok();
+
         [HttpPost("RegistrarEntrada")]
         public IActionResult RegistrarEntrada([FromBody] EntradaModel entrada)
         {

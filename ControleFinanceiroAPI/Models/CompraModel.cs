@@ -9,6 +9,8 @@
         public string Descricao { get; set; } = string.Empty;
         public decimal ValorTotal { get; set; }
         public string? MesAno { get; set; }
+        public bool ImportacaoPluggy { get; set; }
+        public DateTime? DataCompraOriginal { get; set; }
         public DateTime Data { get; set; }
         public string Pessoa { get; set; } = string.Empty;  // ✅ Novo
         public string Fonte { get; set; } = string.Empty;   // ✅ Novo

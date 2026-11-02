@@ -25,6 +25,11 @@ public sealed class OperationResult
         return new OperationResult(false, StatusCodes.Status400BadRequest, message, null);
     }
 
+    public static OperationResult Conflict(string message)
+    {
+        return new OperationResult(false, StatusCodes.Status409Conflict, message, null);
+    }
+
     public static OperationResult Error(string message)
     {
         return new OperationResult(false, StatusCodes.Status500InternalServerError, message, null);

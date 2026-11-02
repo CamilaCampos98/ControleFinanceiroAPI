@@ -18,6 +18,10 @@ public sealed class CompraWorkflowService
         if (compra == null)
             return OperationResult.BadRequest("Dados da compra não informados.");
 
+        if (compra.ImportacaoPluggy && compra.DataCompraOriginal is { } originalDate &&
+            compra.Data.Date != originalDate.AddMonths(Math.Max(1, compra.ParcelaInicial) - 1).Date)
+            return OperationResult.BadRequest("A data da parcela não corresponde à data da compra original.");
+
         string mesFatura;
         try
         {
@@ -49,6 +53,9 @@ public sealed class CompraWorkflowService
                 return OperationResult.BadRequest(
                     $"A pessoa {compra.Pessoa} não possui entrada cadastrada no mês {mesFatura}.");
             }
+
+            if (compra.ImportacaoPluggy && _googleSheetsService.HasMatchingImportedInstallment(compra))
+                return OperationResult.Conflict("Uma das parcelas importadas já existe para esta data, valor, pessoa e cartão.");
 
             _googleSheetsService.WritePurchaseWithInstallments(compra);
 
