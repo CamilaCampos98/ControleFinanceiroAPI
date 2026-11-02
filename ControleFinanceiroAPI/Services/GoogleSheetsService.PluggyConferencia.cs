@@ -23,8 +23,16 @@ public partial class GoogleSheetsService
     }
 
     public static IReadOnlyList<ResultadoConferenciaPluggy> ConferirParcelasPluggy(
-        IReadOnlyList<ParcelaPluggyConferencia> parcelas, IReadOnlyList<LancamentoConferencia> lancamentos) =>
-        parcelas.Select(parcela => ConferirParcela(parcela, lancamentos)).ToList();
+        IReadOnlyList<ParcelaPluggyConferencia> parcelas, IReadOnlyList<LancamentoConferencia> lancamentos)
+    {
+        // Um lançamento exato pertence à sua própria compra; não pode servir de candidato para outra.
+        var linhasExatas = lancamentos.Where(lancamento => parcelas.Any(parcela =>
+            Igual(lancamento.Pessoa, parcela.Pessoa) && Igual(lancamento.Cartao, parcela.Cartao) &&
+            lancamento.Data == parcela.Data.Date && lancamento.Valor == parcela.Valor))
+            .Select(lancamento => lancamento.Linha).ToHashSet();
+
+        return parcelas.Select(parcela => ConferirParcela(parcela, lancamentos, linhasExatas)).ToList();
+    }
 
     private static LancamentoConferencia? LerLancamento(IList<object> linha, int numero)
     {
@@ -43,7 +51,7 @@ public partial class GoogleSheetsService
     }
 
     private static ResultadoConferenciaPluggy ConferirParcela(ParcelaPluggyConferencia parcela,
-        IReadOnlyList<LancamentoConferencia> lancamentos)
+        IReadOnlyList<LancamentoConferencia> lancamentos, IReadOnlySet<int> linhasExatas)
     {
         var pessoa = lancamentos.Where(item => Igual(item.Pessoa, parcela.Pessoa)).ToList();
         var exatos = pessoa.Where(item => Igual(item.Cartao, parcela.Cartao) &&
@@ -51,12 +59,13 @@ public partial class GoogleSheetsService
         if (exatos.Count > 0)
             return new(parcela.Id, "Existente", exatos[0], exatos.Count);
 
-        var cartaoDivergente = pessoa.FirstOrDefault(item => !Igual(item.Cartao, parcela.Cartao) &&
+        var disponiveis = pessoa.Where(item => !linhasExatas.Contains(item.Linha)).ToList();
+        var cartaoDivergente = disponiveis.FirstOrDefault(item => !Igual(item.Cartao, parcela.Cartao) &&
             item.Data == parcela.Data.Date && item.Valor == parcela.Valor);
         if (cartaoDivergente is not null)
             return new(parcela.Id, "CartaoDivergente", cartaoDivergente, 1);
 
-        var possivel = pessoa.Where(item => Igual(item.Cartao, parcela.Cartao))
+        var possivel = disponiveis.Where(item => Igual(item.Cartao, parcela.Cartao))
             .Select(item => new { Item = item, Dias = Math.Abs((item.Data - parcela.Data.Date).Days),
                 Diferenca = Math.Abs(item.Valor - parcela.Valor) })
             .Where(candidato => candidato.Dias <= 7 && candidato.Diferenca <= 5m &&

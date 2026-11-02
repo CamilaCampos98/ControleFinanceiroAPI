@@ -23,9 +23,21 @@ var conferencia = GoogleSheetsService.ConferirParcelasPluggy(
         new(1482, new DateTime(2026, 10, 18), 100m, "Diego", "Itau Adicional", "", "Abastecimento")
     ]);
 Equal("Existente", conferencia[0].Status, "conferência exata sem depender da descrição");
-Equal("Revisar", conferencia[1].Status, "diferença de centavo exige revisão");
+Equal("NaoEncontrada", conferencia[1].Status, "lançamento exato não pode ser reutilizado por outra compra");
 Equal("CartaoDivergente", conferencia[2].Status, "cartão diferente exige revisão");
 Equal("NaoEncontrada", conferencia[3].Status, "compra sem correspondente aparente");
+var centavoSemExato = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("centavo", new DateTime(2026, 10, 28), 160.17m, "Camila", "Itau Titular", "3/6", "Airbnb")],
+    [new(1269, new DateTime(2026, 10, 28), 160.18m, "Camila", "Itau Titular", "3/6", "Airbnb")]);
+Equal("Revisar", centavoSemExato[0].Status, "diferença de centavo sem compra exata exige revisão");
+var hortifruti = GoogleSheetsService.ConferirParcelasPluggy(
+    [
+        new("dezoito", new DateTime(2026, 10, 20), 18m, "Camila", "Itau Titular", "1/1", "Hortifruti Medeiros"),
+        new("vinteTres", new DateTime(2026, 10, 20), 23m, "Camila", "Itau Titular", "1/1", "Hortifruti Maria")
+    ],
+    [new(1486, new DateTime(2026, 10, 20), 23m, "Camila", "Itau Titular", "", "Hortifruti")]);
+Equal("NaoEncontrada", hortifruti[0].Status, "Hortifruti de R$ 18 é compra distinta");
+Equal("Existente", hortifruti[1].Status, "Hortifruti de R$ 23 já foi lançado");
 var duplicidade = GoogleSheetsService.ConferirParcelasPluggy(
     [new("repetida", new DateTime(2026, 10, 8), 64.26m, "Camila", "Itau Titular", "2/9", "Shopee")],
     [
