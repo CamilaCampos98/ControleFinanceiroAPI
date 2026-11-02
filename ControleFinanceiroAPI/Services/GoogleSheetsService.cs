@@ -1788,33 +1788,7 @@ public partial class GoogleSheetsService
             !configuracaoEscolhida.Value.TryGetValue(cartaoBase, out var diaFechamento))
             throw new Exception($"Não existe fechamento do cartão {cartaoBase} para {pessoa}");
 
-        // ======================================================
-        // REGRA DA SUA FATURA:
-        // MM/yyyy = (fechamento + 1) do próprio mês
-        //            até fechamento do mês seguinte
-        // ======================================================
-
-        int diasMesAtual = DateTime.DaysInMonth(mesAnoDate.Year, mesAnoDate.Month);
-        int diaFechamentoMesAtual = Math.Min(diaFechamento, diasMesAtual);
-
-        DateTime inicio = new DateTime(
-            mesAnoDate.Year,
-            mesAnoDate.Month,
-            diaFechamentoMesAtual
-        ).AddDays(1); // só aqui soma 1 dia
-
-        var mesSeguinte = mesAnoDate.AddMonths(1);
-
-        int diasMesSeguinte = DateTime.DaysInMonth(mesSeguinte.Year, mesSeguinte.Month);
-        int diaFechamentoMesSeguinte = Math.Min(diaFechamento, diasMesSeguinte);
-
-        DateTime fim = new DateTime(
-            mesSeguinte.Year,
-            mesSeguinte.Month,
-            diaFechamentoMesSeguinte
-        );
-
-        return (inicio, fim);
+        return CalcularPeriodoFatura(mesAnoDate, diaFechamento, cartaoBase, pessoa);
     }
 
 

@@ -46,6 +46,23 @@ var duplicidade = GoogleSheetsService.ConferirParcelasPluggy(
     ]);
 Equal(2, duplicidade[0].QuantidadeCorrespondencias, "lançamentos repetidos na planilha são sinalizados");
 
+var setembroInfinite = GoogleSheetsService.CalcularPeriodoFatura(
+    new DateTime(2026, 9, 1), 8, "ITAU", "Camila");
+var outubroInfinite = GoogleSheetsService.CalcularPeriodoFatura(
+    new DateTime(2026, 10, 1), 8, "ITAU", "Camila");
+var outubroAdicional = GoogleSheetsService.CalcularPeriodoFatura(
+    new DateTime(2026, 10, 1), 8, "ITAU", "Diego");
+var novembroInfinite = GoogleSheetsService.CalcularPeriodoFatura(
+    new DateTime(2026, 11, 1), 8, "ITAU", "Camila");
+Equal(new DateTime(2026, 10, 7), setembroInfinite.fim, "fatura anterior termina no fechamento antecipado");
+Equal(new DateTime(2026, 10, 8), outubroInfinite.inicio, "compra de 08/10 entra na fatura seguinte");
+Equal(new DateTime(2026, 11, 8), outubroInfinite.fim, "fechamento de novembro permanece no dia 8");
+Equal(outubroInfinite, outubroAdicional, "exceção vale para titular e adicional");
+Equal(new DateTime(2026, 11, 9), novembroInfinite.inicio, "demais períodos seguem o padrão");
+var outroCartao = GoogleSheetsService.CalcularPeriodoFatura(
+    new DateTime(2026, 9, 1), 8, "BRADESCO", "Camila");
+Equal(new DateTime(2026, 10, 8), outroCartao.fim, "exceção não altera outro cartão");
+
 var salonInstallments = PartyScheduleCalculator.Split(1570m, 6, 0);
 Equal(6, salonInstallments.Count, "salão em seis meses");
 Equal(1570m, salonInstallments.Sum(), "salão sem perda de centavos");
