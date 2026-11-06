@@ -4,7 +4,7 @@ using System.Text;
 public partial class GoogleSheetsService
 {
     public sealed record ParcelaPluggyConferencia(string Id, DateTime Data, decimal Valor, string Pessoa,
-        string Cartao, string Parcela, string Descricao);
+        string Cartao, string Parcela, string Descricao, DateTime? DataInformadaPluggy = null);
 
     public sealed record LancamentoConferencia(int Linha, DateTime Data, decimal Valor, string Pessoa,
         string Cartao, string Parcela, string Descricao);
@@ -27,11 +27,19 @@ public partial class GoogleSheetsService
     {
         // Um lançamento exato pertence à sua própria compra; não pode servir de candidato para outra.
         var linhasExatas = lancamentos.Where(lancamento => parcelas.Any(parcela =>
-            Igual(lancamento.Pessoa, parcela.Pessoa) && Igual(lancamento.Cartao, parcela.Cartao) &&
-            lancamento.Data == parcela.Data.Date && lancamento.Valor == parcela.Valor))
+            CorrespondenciaExata(lancamento, parcela)))
             .Select(lancamento => lancamento.Linha).ToHashSet();
 
-        return parcelas.Select(parcela => ConferirParcela(parcela, lancamentos, linhasExatas)).ToList();
+        var candidatosPorParcela = parcelas.Select(parcela => lancamentos.Any(item =>
+                CorrespondenciaExata(item, parcela))
+            ? new List<LancamentoConferencia>()
+            : lancamentos.Where(item => !linhasExatas.Contains(item.Linha) &&
+                DataProximaDaMesmaCompra(item, parcela)).ToList()).ToList();
+        var disputasPorLinha = candidatosPorParcela.SelectMany(candidatos => candidatos)
+            .GroupBy(item => item.Linha).ToDictionary(grupo => grupo.Key, grupo => grupo.Count());
+
+        return parcelas.Select((parcela, indice) => ConferirParcela(parcela, lancamentos, linhasExatas,
+            candidatosPorParcela[indice], disputasPorLinha)).ToList();
     }
 
     private static LancamentoConferencia? LerLancamento(IList<object> linha, int numero)
@@ -51,38 +59,41 @@ public partial class GoogleSheetsService
     }
 
     private static ResultadoConferenciaPluggy ConferirParcela(ParcelaPluggyConferencia parcela,
-        IReadOnlyList<LancamentoConferencia> lancamentos, IReadOnlySet<int> linhasExatas)
+        IReadOnlyList<LancamentoConferencia> lancamentos, IReadOnlySet<int> linhasExatas,
+        IReadOnlyList<LancamentoConferencia> candidatosProximos, IReadOnlyDictionary<int, int> disputasPorLinha)
     {
         var pessoa = lancamentos.Where(item => Igual(item.Pessoa, parcela.Pessoa)).ToList();
-        var exatos = pessoa.Where(item => Igual(item.Cartao, parcela.Cartao) &&
-            item.Data == parcela.Data.Date && item.Valor == parcela.Valor).ToList();
+        var exatos = pessoa.Where(item => CorrespondenciaExata(item, parcela)).ToList();
         if (exatos.Count > 0)
             return new(parcela.Id, "Existente", exatos[0], exatos.Count);
 
+        if (candidatosProximos.Count == 1 && disputasPorLinha[candidatosProximos[0].Linha] == 1)
+            return new(parcela.Id, "Existente", candidatosProximos[0], 1);
+        if (candidatosProximos.Count > 0)
+            return new(parcela.Id, "Revisar", candidatosProximos[0], candidatosProximos.Count);
+
         var disponiveis = pessoa.Where(item => !linhasExatas.Contains(item.Linha)).ToList();
         var cartaoDivergente = disponiveis.FirstOrDefault(item => !Igual(item.Cartao, parcela.Cartao) &&
-            item.Data == parcela.Data.Date && item.Valor == parcela.Valor);
+            item.Data == parcela.Data.Date && item.Valor == parcela.Valor &&
+            (!DataFoiAjustada(parcela) || DescricaoRelacionada(item.Descricao, parcela.Descricao)));
         if (cartaoDivergente is not null)
             return new(parcela.Id, "CartaoDivergente", cartaoDivergente, 1);
 
-        var possivel = disponiveis.Where(item => Igual(item.Cartao, parcela.Cartao))
-            .Select(item => new { Item = item, Dias = Math.Abs((item.Data - parcela.Data.Date).Days),
-                Diferenca = Math.Abs(item.Valor - parcela.Valor) })
-            .Where(candidato => candidato.Dias <= 7 && candidato.Diferenca <= 5m &&
-                (candidato.Dias == 0 && MesmaParcela(candidato.Item.Parcela, parcela.Parcela) &&
-                    (parcela.Parcela != "1/1" || candidato.Diferenca <= 1m ||
-                     DescricaoRelacionada(candidato.Item.Descricao, parcela.Descricao)) ||
-                 candidato.Dias == 1 && candidato.Diferenca == 0m ||
-                 DescricaoRelacionada(candidato.Item.Descricao, parcela.Descricao) &&
-                     MesmaParcela(candidato.Item.Parcela, parcela.Parcela)))
-            .OrderBy(candidato => candidato.Dias)
-            .ThenBy(candidato => candidato.Diferenca)
-            .Select(candidato => candidato.Item).FirstOrDefault();
-
-        return possivel is null
-            ? new(parcela.Id, "NaoEncontrada", null, 0)
-            : new(parcela.Id, "Revisar", possivel, 1);
+        return new(parcela.Id, "NaoEncontrada", null, 0);
     }
+
+    private static bool DataProximaDaMesmaCompra(LancamentoConferencia item, ParcelaPluggyConferencia parcela) =>
+        Igual(item.Pessoa, parcela.Pessoa) && Igual(item.Cartao, parcela.Cartao) &&
+        item.Valor == parcela.Valor && Math.Abs((item.Data - parcela.Data.Date).Days) == 1 &&
+        MesmaParcela(item.Parcela, parcela.Parcela) && DescricaoRelacionada(item.Descricao, parcela.Descricao);
+
+    private static bool CorrespondenciaExata(LancamentoConferencia item, ParcelaPluggyConferencia parcela) =>
+        Igual(item.Pessoa, parcela.Pessoa) && Igual(item.Cartao, parcela.Cartao) &&
+        item.Data == parcela.Data.Date && item.Valor == parcela.Valor &&
+        (!DataFoiAjustada(parcela) || DescricaoRelacionada(item.Descricao, parcela.Descricao));
+
+    private static bool DataFoiAjustada(ParcelaPluggyConferencia parcela) =>
+        parcela.DataInformadaPluggy.HasValue && parcela.DataInformadaPluggy.Value.Date != parcela.Data.Date;
 
     private static bool MesmaParcela(string existente, string pluggy) =>
         string.Equals(string.IsNullOrWhiteSpace(existente) ? "1/1" : existente.Trim(),
@@ -94,9 +105,11 @@ public partial class GoogleSheetsService
     private static bool DescricaoRelacionada(string a, string b)
     {
         var palavras = Normalizar(a).Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(palavra => palavra.Length >= 4).ToHashSet();
+            .Where(palavra => palavra.Length >= 5).ToHashSet();
         return Normalizar(b).Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Any(palavra => palavra.Length >= 4 && palavras.Contains(palavra));
+            .Any(palavra => palavra.Length >= 5 && palavras.Any(outra =>
+                outra.StartsWith(palavra, StringComparison.Ordinal) ||
+                palavra.StartsWith(outra, StringComparison.Ordinal)));
     }
 
     private static string Normalizar(string texto)

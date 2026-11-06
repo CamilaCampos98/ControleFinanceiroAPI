@@ -29,7 +29,61 @@ Equal("NaoEncontrada", conferencia[3].Status, "compra sem correspondente aparent
 var centavoSemExato = GoogleSheetsService.ConferirParcelasPluggy(
     [new("centavo", new DateTime(2026, 10, 28), 160.17m, "Camila", "Itau Titular", "3/6", "Airbnb")],
     [new(1269, new DateTime(2026, 10, 28), 160.18m, "Camila", "Itau Titular", "3/6", "Airbnb")]);
-Equal("Revisar", centavoSemExato[0].Status, "diferença de centavo sem compra exata exige revisão");
+Equal("NaoEncontrada", centavoSemExato[0].Status, "valor diferente não é a mesma compra");
+var mcdonalds = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("mcdonalds-nova", new DateTime(2026, 11, 3), 86.80m, "Camila", "Itau Titular", "1/1",
+        "Mc Donalds - Arcos DouradSao PauloBR")],
+    [new(1508, new DateTime(2026, 11, 1), 84.80m, "Camila", "Itau Titular", "1/1", "Mc donalds")]);
+Equal("NaoEncontrada", mcdonalds[0].Status, "compra do McDonald's com outra data e valor é distinta");
+var datasDaFatura = GoogleSheetsService.ConferirParcelasPluggy(
+    [
+        new("burger", new DateTime(2026, 11, 1), 96.39m, "Camila", "Itau Titular", "1/1",
+            "99Food *The Burger On TheSao PauloBR"),
+        new("ifood", new DateTime(2026, 10, 29), 39.99m, "Camila", "Itau Titular", "1/1",
+            "IFD*iFoodOsascoBR"),
+        new("estrada", new DateTime(2026, 11, 2), 84.80m, "Camila", "Itau Titular", "1/1",
+            "ESTRADA DOS ROMEIROS")
+    ],
+    [
+        new(1506, new DateTime(2026, 10, 31), 96.39m, "Camila", "Itau Titular", "1/1",
+            "Burger on the table"),
+        new(1504, new DateTime(2026, 10, 28), 39.99m, "Camila", "Itau Titular", "1/1",
+            "Ifood"),
+        new(1508, new DateTime(2026, 11, 1), 84.80m, "Camila", "Itau Titular", "1/1",
+            "Mc donalds")
+    ]);
+Equal("Existente", datasDaFatura[0].Status, "Burger já lançado com data correta na planilha");
+Equal(new DateTime(2026, 10, 31), datasDaFatura[0].Correspondente!.Data,
+    "data da planilha prevalece para o Burger");
+Equal("Existente", datasDaFatura[1].Status, "iFood já lançado com data correta na planilha");
+Equal("NaoEncontrada", datasDaFatura[2].Status,
+    "Estrada dos Romeiros não é o McDonald's apesar do mesmo valor");
+var datasConvertidas = GoogleSheetsService.ConferirParcelasPluggy(
+    [
+        new("burger", new DateTime(2026, 10, 31), 96.39m, "Camila", "Itau Titular", "1/1",
+            "99Food *The Burger On TheSao PauloBR", new DateTime(2026, 11, 1)),
+        new("estrada", new DateTime(2026, 11, 1), 84.80m, "Camila", "Itau Titular", "1/1",
+            "ESTRADA DOS ROMEIROS", new DateTime(2026, 11, 2))
+    ],
+    [
+        new(1506, new DateTime(2026, 10, 31), 96.39m, "Camila", "Itau Titular", "1/1",
+            "Burger on the table"),
+        new(1508, new DateTime(2026, 11, 1), 84.80m, "Camila", "Itau Titular", "1/1",
+            "Mc donalds")
+    ]);
+Equal("Existente", datasConvertidas[0].Status, "compra com data UTC convertida e estabelecimento igual já existe");
+Equal("NaoEncontrada", datasConvertidas[1].Status,
+    "data UTC convertida não pode confundir Estrada dos Romeiros com McDonald's");
+var dataAmbigua = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("burger", new DateTime(2026, 11, 1), 96.39m, "Camila", "Itau Titular", "1/1",
+        "99Food The Burger")],
+    [
+        new(1506, new DateTime(2026, 10, 31), 96.39m, "Camila", "Itau Titular", "1/1",
+            "Burger on the table"),
+        new(1507, new DateTime(2026, 11, 2), 96.39m, "Camila", "Itau Titular", "1/1",
+            "Burger on the table")
+    ]);
+Equal("Revisar", dataAmbigua[0].Status, "duas possíveis linhas não podem ser ocultadas automaticamente");
 var hortifruti = GoogleSheetsService.ConferirParcelasPluggy(
     [
         new("dezoito", new DateTime(2026, 10, 20), 18m, "Camila", "Itau Titular", "1/1", "Hortifruti Medeiros"),
@@ -575,4 +629,4 @@ Equal(0m, firstTrip.IncomeCoverageByPeriod["03/2027"], "cobertura mais próxima 
 Equal(100m, secondTrip.IncomeCoverageByPeriod["08/2027"], "cobertura seguinte mantém saldo correto");
 Equal(60m, secondTrip.IncomeReserveShortfall, "falta de cobertura fica registrada");
 
-Console.WriteLine("Testes de férias e da festa passaram.");
+Console.WriteLine("Testes de férias, festa e conferência Pluggy passaram.");
