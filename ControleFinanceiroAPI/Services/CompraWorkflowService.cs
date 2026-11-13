@@ -55,7 +55,7 @@ public sealed class CompraWorkflowService
             }
 
             if (compra.ImportacaoPluggy && _googleSheetsService.HasMatchingImportedInstallment(compra))
-                return OperationResult.Conflict("Uma das parcelas importadas já existe para esta data, valor, pessoa e cartão.");
+                return OperationResult.Conflict("Uma parcela ou a série desta compra já existe na planilha para esta pessoa e cartão.");
 
             _googleSheetsService.WritePurchaseWithInstallments(compra);
 

@@ -208,6 +208,16 @@ public partial class GoogleSheetsService
                 return true;
         }
 
+        if (compra.ImportacaoPluggy)
+        {
+            var lancamentos = rows.Skip(1).Select((row, index) => LerLancamento(row, index + 2))
+                .Where(item => item is not null).Cast<LancamentoConferencia>().ToList();
+            var parcela = new ParcelaPluggyConferencia("", compra.Data, installmentAmount,
+                compra.Pessoa, compra.Cartao, $"{firstInstallment}/{totalInstallments}", compra.Descricao);
+            if (ConferirParcelasPluggy([parcela], lancamentos)[0].Status != "NaoEncontrada")
+                return true;
+        }
+
         return false;
     }
 

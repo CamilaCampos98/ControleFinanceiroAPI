@@ -72,8 +72,8 @@ var datasConvertidas = GoogleSheetsService.ConferirParcelasPluggy(
             "Mc donalds")
     ]);
 Equal("Existente", datasConvertidas[0].Status, "compra com data UTC convertida e estabelecimento igual já existe");
-Equal("NaoEncontrada", datasConvertidas[1].Status,
-    "data UTC convertida não pode confundir Estrada dos Romeiros com McDonald's");
+Equal("Revisar", datasConvertidas[1].Status,
+    "data UTC convertida igual à de outro estabelecimento não deve ser importada automaticamente");
 var dataAmbigua = GoogleSheetsService.ConferirParcelasPluggy(
     [new("burger", new DateTime(2026, 11, 1), 96.39m, "Camila", "Itau Titular", "1/1",
         "99Food The Burger")],
@@ -99,6 +99,49 @@ var duplicidade = GoogleSheetsService.ConferirParcelasPluggy(
         new(1319, new DateTime(2026, 10, 8), 64.26m, "Camila", "Itau Titular", "2/9", "Shoppe")
     ]);
 Equal(2, duplicidade[0].QuantidadeCorrespondencias, "lançamentos repetidos na planilha são sinalizados");
+
+var parcelaJaProjetada = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("shopee-2", new DateTime(2026, 12, 12), 63.54m, "Camila", "Itau Titular", "2/6",
+        "Descrição diferente na Pluggy")],
+    Enumerable.Range(1, 6).Select(numero => new GoogleSheetsService.LancamentoConferencia(
+        1600 + numero, new DateTime(2026, 11, 11).AddMonths(numero - 1), 63.54m,
+        "camila", "Itau Titular", $"{numero}/6", "Shopee", "1480")).ToList());
+Equal("Existente", parcelaJaProjetada[0].Status,
+    "parcela 2 já projetada deve ser reconhecida pela série completa da parcela 1");
+
+var serieParcial = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("shopee-2", new DateTime(2026, 12, 12), 63.54m, "Camila", "Itau Titular", "2/6", "Shopee")],
+    [new(1601, new DateTime(2026, 11, 11), 63.54m, "Camila", "Itau Titular", "1/6", "Shopee", "1480")]);
+Equal("Revisar", serieParcial[0].Status, "série incompleta não pode ser importada automaticamente");
+
+var outraParcelaMesmoDia = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("parcela-2", new DateTime(2026, 12, 11), 63.54m, "Camila", "Itau Titular", "2/6", "Shopee")],
+    [new(1602, new DateTime(2026, 12, 11), 63.54m, "Camila", "Itau Titular", "1/1", "Outra compra")]);
+Equal("NaoEncontrada", outraParcelaMesmoDia[0].Status,
+    "compra à vista do mesmo dia e valor não identifica uma parcela");
+
+var seriesComValorDiferente = GoogleSheetsService.ConferirParcelasPluggy(
+    [
+        new("super-big", new DateTime(2026, 11, 10), 57.97m, "Camila", "Itau Titular", "2/6",
+            "SUPER BIG COMERCIO02/06"),
+        new("amazon", new DateTime(2026, 11, 28), 88.86m, "Camila", "Itau Titular", "2/3",
+            "AMAZON BRSAO PAULO02/03")
+    ],
+    [
+        new(1446, new DateTime(2026, 10, 10), 58.02m, "Camila", "Itau Titular", "1/6", "super big", "1402"),
+        new(1501, new DateTime(2026, 10, 28), 88.88m, "Camila", "Itau Titular", "1/3", "Fraldas", "1439")
+    ]);
+Equal("Revisar", seriesComValorDiferente[0].Status,
+    "Super Big com diferença de centavos não pode ser importado de novo automaticamente");
+Equal("Revisar", seriesComValorDiferente[1].Status,
+    "Amazon e Fraldas têm dados próximos, mas não podem ser tratadas automaticamente como a mesma compra");
+
+var compraUtcSemDescricaoIgual = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("pasteis", new DateTime(2026, 11, 10), 54m, "Camila", "Itau Titular", "1/1",
+        "PASTEIS KOYAMA", new DateTime(2026, 11, 11))],
+    [new(1561, new DateTime(2026, 11, 10), 54m, "Camila", "Itau Titular", "", "Pastel", "1479")]);
+Equal("Revisar", compraUtcSemDescricaoIgual[0].Status,
+    "data UTC convertida e valor igual, mas descrição diferente, exigem revisão");
 
 var setembroInfinite = GoogleSheetsService.CalcularPeriodoFatura(
     new DateTime(2026, 9, 1), 8, "ITAU", "Camila");
