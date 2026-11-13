@@ -143,6 +143,44 @@ var compraUtcSemDescricaoIgual = GoogleSheetsService.ConferirParcelasPluggy(
 Equal("Revisar", compraUtcSemDescricaoIgual[0].Status,
     "data UTC convertida e valor igual, mas descrição diferente, exigem revisão");
 
+var serieParaCorrigir = Enumerable.Range(1, 3).Select(numero =>
+    new GoogleSheetsService.LancamentoConferencia(1600 + numero,
+        new DateTime(2026, 10, 10).AddMonths(numero - 1), 58.02m, "Camila",
+        "Itau Titular", $"{numero}/3", "Super Big", "1402", "Crédito", "Salario", "11/2026"))
+    .ToList();
+var correcaoSerie = new GoogleSheetsService.CorrigirRevisaoPluggyRequest(
+    1602, "1402", new DateTime(2026, 11, 10), 58.02m, "Camila", "Itau Titular",
+    "2/3", "Super Big", "Super Big", 57.97m, new DateTime(2026, 11, 11), "Camila",
+    "Itau Titular", "Crédito", "Salario");
+var planoRevisao = GoogleSheetsService.PlanejarRevisaoPluggy(correcaoSerie, serieParaCorrigir);
+Equal(3, planoRevisao.Count, "revisão de parcela altera toda a série");
+Equal(new DateTime(2026, 10, 11), planoRevisao[0].NovaData,
+    "data da primeira parcela acompanha o ajuste feito na segunda");
+Equal(new DateTime(2026, 12, 11), planoRevisao[2].NovaData,
+    "data da terceira parcela acompanha o ajuste feito na segunda");
+var serieCorrigida = planoRevisao.Select(item => item.Original with
+    { Data = item.NovaData, Valor = correcaoSerie.Valor, Descricao = correcaoSerie.Compra }).ToList();
+var conferenciaAposCorrecao = GoogleSheetsService.ConferirParcelasPluggy(
+    [new("super-big", new DateTime(2026, 11, 11), 57.97m, "Camila", "Itau Titular",
+        "2/3", "Super Big")], serieCorrigida);
+Equal("Existente", conferenciaAposCorrecao[0].Status,
+    "revisão some após salvar uma série totalmente conciliada");
+var linhaAlterada = correcaoSerie with { ValorOriginal = 60m };
+var rejeitouAlteracaoConcorrente = false;
+try
+{
+    GoogleSheetsService.PlanejarRevisaoPluggy(linhaAlterada, serieParaCorrigir);
+}
+catch (InvalidOperationException) { rejeitouAlteracaoConcorrente = true; }
+Equal(true, rejeitouAlteracaoConcorrente, "revisão rejeita linha alterada depois da conferência");
+var rejeitouSerieIncompleta = false;
+try
+{
+    GoogleSheetsService.PlanejarRevisaoPluggy(correcaoSerie, serieParaCorrigir.Take(2).ToList());
+}
+catch (InvalidOperationException) { rejeitouSerieIncompleta = true; }
+Equal(true, rejeitouSerieIncompleta, "revisão rejeita série incompleta");
+
 var setembroInfinite = GoogleSheetsService.CalcularPeriodoFatura(
     new DateTime(2026, 9, 1), 8, "ITAU", "Camila");
 var outubroInfinite = GoogleSheetsService.CalcularPeriodoFatura(

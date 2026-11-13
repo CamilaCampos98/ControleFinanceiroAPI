@@ -226,6 +226,18 @@ namespace ControleFinanceiroAPI.Controllers
             });
         }
 
+        [HttpPut("CorrigirRevisaoPluggy")]
+        public IActionResult CorrigirRevisaoPluggy([FromBody] CorrigirRevisaoPluggyRequest request)
+        {
+            try
+            {
+                var quantidade = _googleSheetsService.CorrigirRevisaoPluggy(request);
+                return Ok(new { message = "Compra corrigida na planilha.", parcelasAtualizadas = quantidade });
+            }
+            catch (ArgumentException ex) { return BadRequest(ex.Message); }
+            catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+        }
+
         [HttpGet("GetCartoes")]
         public async Task<ActionResult<List<string>>> GetCartoes()
         {

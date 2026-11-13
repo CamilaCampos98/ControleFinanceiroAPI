@@ -7,10 +7,12 @@ public partial class GoogleSheetsService
         string Cartao, string Parcela, string Descricao, DateTime? DataInformadaPluggy = null);
 
     public sealed record LancamentoConferencia(int Linha, DateTime Data, decimal Valor, string Pessoa,
-        string Cartao, string Parcela, string Descricao, string IdLancamento = "");
+        string Cartao, string Parcela, string Descricao, string IdLancamento = "",
+        string FormaPgto = "", string Fonte = "", string MesAno = "");
 
     public sealed record ResultadoConferenciaPluggy(string Id, string Status,
-        LancamentoConferencia? Correspondente, int QuantidadeCorrespondencias);
+        LancamentoConferencia? Correspondente, int QuantidadeCorrespondencias,
+        IReadOnlyList<LancamentoConferencia>? Candidatos = null);
 
     public IReadOnlyList<ResultadoConferenciaPluggy> ConferirParcelasPluggy(
         IReadOnlyList<ParcelaPluggyConferencia> parcelas)
@@ -56,7 +58,10 @@ public partial class GoogleSheetsService
             linha.ElementAtOrDefault(9)?.ToString()?.Trim() ?? "",
             linha.ElementAtOrDefault(2)?.ToString()?.Trim() ?? "",
             linha.ElementAtOrDefault(3)?.ToString()?.Trim() ?? "",
-            linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "");
+            linha.ElementAtOrDefault(0)?.ToString()?.Trim() ?? "",
+            linha.ElementAtOrDefault(1)?.ToString()?.Trim() ?? "",
+            linha.ElementAtOrDefault(8)?.ToString()?.Trim() ?? "",
+            linha.ElementAtOrDefault(5)?.ToString()?.Trim() ?? "");
     }
 
     private static ResultadoConferenciaPluggy ConferirParcela(ParcelaPluggyConferencia parcela,
@@ -66,7 +71,7 @@ public partial class GoogleSheetsService
         var pessoa = lancamentos.Where(item => Igual(item.Pessoa, parcela.Pessoa)).ToList();
         var exatos = pessoa.Where(item => CorrespondenciaExata(item, parcela)).ToList();
         if (exatos.Count > 0)
-            return new(parcela.Id, exatos.Count == 1 ? "Existente" : "Revisar", exatos[0], exatos.Count);
+            return new(parcela.Id, exatos.Count == 1 ? "Existente" : "Revisar", exatos[0], exatos.Count, exatos);
 
         var iniciosDaSerie = EncontrarIniciosDaSerie(parcela, lancamentos);
         if (iniciosDaSerie.Count > 0)
@@ -74,13 +79,13 @@ public partial class GoogleSheetsService
             var inicio = iniciosDaSerie[0];
             var completa = iniciosDaSerie.Count == 1 &&
                 SerieCompleta(inicio, parcela, lancamentos);
-            return new(parcela.Id, completa ? "Existente" : "Revisar", inicio, iniciosDaSerie.Count);
+            return new(parcela.Id, completa ? "Existente" : "Revisar", inicio, iniciosDaSerie.Count, iniciosDaSerie);
         }
 
         if (candidatosProximos.Count == 1 && disputasPorLinha[candidatosProximos[0].Linha] == 1)
-            return new(parcela.Id, "Existente", candidatosProximos[0], 1);
+            return new(parcela.Id, "Existente", candidatosProximos[0], 1, candidatosProximos);
         if (candidatosProximos.Count > 0)
-            return new(parcela.Id, "Revisar", candidatosProximos[0], candidatosProximos.Count);
+            return new(parcela.Id, "Revisar", candidatosProximos[0], candidatosProximos.Count, candidatosProximos);
 
         if (TryParseParcela(parcela.Parcela, out var numero, out _) && numero == 1)
         {
@@ -90,7 +95,7 @@ public partial class GoogleSheetsService
                 Math.Abs((item.Data - parcela.Data.Date).Days) <= 1 &&
                 Math.Abs(item.Valor - parcela.Valor) is > 0 and <= 0.10m).ToList();
             if (inicioComValorProximo.Count > 0)
-                return new(parcela.Id, "Revisar", inicioComValorProximo[0], inicioComValorProximo.Count);
+                return new(parcela.Id, "Revisar", inicioComValorProximo[0], inicioComValorProximo.Count, inicioComValorProximo);
         }
 
         // Uma data convertida de UTC pode coincidir com uma compra de outro estabelecimento.
@@ -101,7 +106,7 @@ public partial class GoogleSheetsService
                 Igual(item.Cartao, parcela.Cartao) && MesmaParcela(item.Parcela, parcela.Parcela) &&
                 item.Data == parcela.Data.Date && item.Valor == parcela.Valor).ToList();
             if (mesmaDataEValor.Count > 0)
-                return new(parcela.Id, "Revisar", mesmaDataEValor[0], mesmaDataEValor.Count);
+                return new(parcela.Id, "Revisar", mesmaDataEValor[0], mesmaDataEValor.Count, mesmaDataEValor);
         }
 
         var disponiveis = pessoa.Where(item => !linhasExatas.Contains(item.Linha)).ToList();
@@ -109,7 +114,7 @@ public partial class GoogleSheetsService
             item.Data == parcela.Data.Date && item.Valor == parcela.Valor &&
             (!DataFoiAjustada(parcela) || DescricaoRelacionada(item.Descricao, parcela.Descricao)));
         if (cartaoDivergente is not null)
-            return new(parcela.Id, "CartaoDivergente", cartaoDivergente, 1);
+            return new(parcela.Id, "CartaoDivergente", cartaoDivergente, 1, [cartaoDivergente]);
 
         return new(parcela.Id, "NaoEncontrada", null, 0);
     }
